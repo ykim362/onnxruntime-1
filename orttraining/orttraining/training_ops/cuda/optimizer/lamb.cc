@@ -106,6 +106,7 @@ void check_inputs_and_outputs(
 
 template <typename TWeight, typename TGradient, typename TMomentum, typename TMixedPrecision>
 Status copy_inputs_to_outputs(
+    cudaStream_t stream,
     OpKernelContext* ctx,
     const int non_grouped_input_count,
     const int non_grouped_output_count,
@@ -145,16 +146,16 @@ Status copy_inputs_to_outputs(
       w_mixed_precision_new->SetByteOffset(w_mixed_precision->ByteOffset());
 
     if (w_new) {
-      ORT_RETURN_IF_ERROR(CopyIfNotSameBuffer<TWeight>(w, *w_new));
+      ORT_RETURN_IF_ERROR(CopyIfNotSameBuffer<TWeight>(stream, w, *w_new));
     }
     if (g_new) {
-      ORT_RETURN_IF_ERROR(CopyIfNotSameBuffer<TGradient>(g, *g_new));
+      ORT_RETURN_IF_ERROR(CopyIfNotSameBuffer<TGradient>(stream, g, *g_new));
     }
-    ORT_RETURN_IF_ERROR(CopyIfNotSameBuffer<TMomentum>(m1, m1_new));
-    ORT_RETURN_IF_ERROR(CopyIfNotSameBuffer<TMomentum>(m2, m2_new));
+    ORT_RETURN_IF_ERROR(CopyIfNotSameBuffer<TMomentum>(stream, m1, m1_new));
+    ORT_RETURN_IF_ERROR(CopyIfNotSameBuffer<TMomentum>(stream, m2, m2_new));
 
     if (w_mixed_precision_new) {
-      ORT_RETURN_IF_ERROR(CopyIfNotSameBuffer<TMixedPrecision>(*w_mixed_precision, *w_mixed_precision_new));
+      ORT_RETURN_IF_ERROR(CopyIfNotSameBuffer<TMixedPrecision>(stream, *w_mixed_precision, *w_mixed_precision_new));
     }
   }
 
@@ -163,6 +164,7 @@ Status copy_inputs_to_outputs(
 
 template <typename CudaT2, typename CudaT3, typename CudaT4, typename CudaT_GRAD_NORM>
 Status launch_lamb_compute_direction(
+    cudaStream_t stream, 
     const int64_t update_count,
     const int group_count,
     const CudaT2* p_loss_scale,
@@ -210,6 +212,7 @@ Status launch_lamb_compute_direction(
         onnxruntime::contrib::compute_bias_correction_coefficient(betas[i], update_count) : 1.f;
 
       LambComputeDirection(
+          stream,
           p_ws[i],
           p_gs[i],
           p_m1s[i],
@@ -256,6 +259,7 @@ Status launch_lamb_compute_direction(
     LambStage1 lamb_stage1;
 
     launch_multi_tensor_functor<tensor_count_per_group, LambStage1, const CudaT2*, const CudaT_GRAD_NORM*, float, float, float, float>(
+        stream,
         2048 * 32,
         tensor_sizes_in_buckets[key],
         buckets[key],
@@ -268,6 +272,7 @@ Status launch_lamb_compute_direction(
 
 template <typename CudaTNorm, typename CudaTIn1, typename CudaTIn2>
 Status launch_lamb_reduction(
+    cudaStream_t stream,
     const int group_count,
     std::vector<int>& tensor_sizes,
     std::vector<CudaTNorm*>& p_w_norms,
@@ -293,11 +298,13 @@ Status launch_lamb_reduction(
   for (int i = 0; i < group_count; ++i) {
     if (tensor_sizes[i] > max_tensor_size) {
       reduce_square_sum(
+          stream,
           p_ws[i],
           p_w_norms[i],
           tensor_sizes[i],
           reduction_buffer);
       reduce_square_sum(
+          stream,
           p_ds[i],
           p_d_norms[i],
           tensor_sizes[i],
@@ -327,6 +334,7 @@ Status launch_lamb_reduction(
     typedef LambMultiTensorReductionFunctor<CudaTIn1, CudaTIn2, CudaTNorm, CudaTNorm, CudaTNorm> TReducer;
     TReducer reducer;
     launch_multi_tensor_functor<tensor_count_per_group, TReducer>(
+        stream,
         2048 * 32,
         tensor_sizes_in_buckets,
         buckets,
@@ -338,6 +346,7 @@ Status launch_lamb_reduction(
 
 template <typename CudaT1, typename CudaT2, typename CudaT3, typename CudaT_MIXED_PRECISION_FP>
 Status launch_lamb_update(
+    cudaStream_t stream,
     const int group_count,
     const CudaT1* eta,
     const float ratio_min,
@@ -370,6 +379,7 @@ Status launch_lamb_update(
   for (int i = 0; i < group_count; ++i) {
     if (tensor_sizes[i] > max_tensor_size) {
       LambUpdate(
+          stream,
           eta,
           ratio_min,
           ratio_max,
@@ -412,6 +422,7 @@ Status launch_lamb_update(
     launch_multi_tensor_functor<
       tensor_count_per_group, LambStage2,
       const CudaT1*, const float, const float>(
+        stream,
         2048 * 32,
         tensor_sizes_in_bucket,
         buckets,
@@ -485,6 +496,7 @@ Status LambOptimizer<T1, T2, T3, T4, T_GRAD_NORM, T_MIXED_PRECISION_FP>::Compute
     auto update_signal = *update_signal_tensor->template Data<bool>();
     if (!update_signal) {
       return copy_inputs_to_outputs<T2, T3, T4, T_MIXED_PRECISION_FP>(
+          Stream(),
           ctx,
           non_grouped_input_count,
           non_grouped_output_count,
@@ -521,14 +533,14 @@ Status LambOptimizer<T1, T2, T3, T4, T_GRAD_NORM, T_MIXED_PRECISION_FP>::Compute
   // and T2=float.
   IAllocatorUniquePtr<T2> d_norm_buffer = GetScratchBuffer<T2>(group_count);
   CudaT2* d_norm_data = reinterpret_cast<CudaT2*>(d_norm_buffer.get());
-  ORT_ENFORCE(cudaMemset(d_norm_data, 0, group_count * sizeof(T2)) == cudaSuccess);
+  ORT_ENFORCE(cudaMemsetAsync(d_norm_data, 0, group_count * sizeof(T2), Stream()) == cudaSuccess);
 
   // Allocate buffer for reduction computation of weight tensor.
   // The i-th weight's norm is stored at the i-th element.
   // We reduce type T2 tensor to type T2 scalar. An example is that T2=float.
   IAllocatorUniquePtr<T2> w_norm_buffer = GetScratchBuffer<T2>(group_count);
   CudaT2* w_norm_data = reinterpret_cast<CudaT2*>(w_norm_buffer.get());
-  ORT_ENFORCE(cudaMemset(w_norm_data, 0, group_count * sizeof(T2)) == cudaSuccess);
+  ORT_ENFORCE(cudaMemsetAsync(w_norm_data, 0, group_count * sizeof(T2), Stream()) == cudaSuccess);
 
   // Find the max size of updated weight tensors.
   int max_tensor_size = 0;
@@ -628,6 +640,7 @@ Status LambOptimizer<T1, T2, T3, T4, T_GRAD_NORM, T_MIXED_PRECISION_FP>::Compute
 
 
   launch_lamb_compute_direction(
+      Stream(),
       step_data ? *step_data : 0,
       group_count,
       loss_scale_data,
@@ -640,6 +653,7 @@ Status LambOptimizer<T1, T2, T3, T4, T_GRAD_NORM, T_MIXED_PRECISION_FP>::Compute
       do_bias_correction_);
 
   launch_lamb_reduction(
+      Stream(),
       group_count,
       tensor_sizes,
       p_w_norms,
@@ -649,6 +663,7 @@ Status LambOptimizer<T1, T2, T3, T4, T_GRAD_NORM, T_MIXED_PRECISION_FP>::Compute
       reduction_data);
 
   launch_lamb_update(
+      Stream(),
       group_count,
       eta_data,
       ratio_min_,

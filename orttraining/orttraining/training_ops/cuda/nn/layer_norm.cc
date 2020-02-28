@@ -75,7 +75,7 @@ Status LayerNormGrad<T, U>::ComputeInternal(OpKernelContext* p_op_kernel_context
   auto part_grad_gamma = GetScratchBuffer<CudaU>(part_size * n2);
   auto part_grad_beta = GetScratchBuffer<CudaU>(part_size * n2);
 
-  HostLayerNormGradient(GetDeviceProp(), Y_grad_data, X_data, reinterpret_cast<const CudaT*>(NULL),
+  HostLayerNormGradient(GetDeviceProp(), Stream(), Y_grad_data, X_data, reinterpret_cast<const CudaT*>(NULL),
                         scale_data, reinterpret_cast<const CudaT*>(NULL), mean_data, inv_std_var_data, n1, n2,
                         X_grad_data, scale_grad_data, bias_grad_data,
                         part_grad_gamma.get(), part_grad_beta.get(), part_size);
@@ -124,7 +124,7 @@ Status InvertibleLayerNormGrad<T, U>::ComputeInternal(OpKernelContext* p_op_kern
   auto part_grad_gamma = GetScratchBuffer<CudaU>(part_size * n2);
   auto part_grad_beta = GetScratchBuffer<CudaU>(part_size * n2);
 
-  HostLayerNormGradient(GetDeviceProp(), Y_grad_data, reinterpret_cast<const CudaT*>(NULL), Y_data,
+  HostLayerNormGradient(GetDeviceProp(), Stream(), Y_grad_data, reinterpret_cast<const CudaT*>(NULL), Y_data,
                         scale_data, bias_data, reinterpret_cast<const CudaU*>(NULL), inv_std_var_data, n1, n2,
                         X_grad_data, scale_grad_data, bias_grad_data,
                         part_grad_gamma.get(), part_grad_beta.get(), part_size);

@@ -92,7 +92,7 @@ Status GatherGrad::ComputeInternal(OpKernelContext* context) const {
   const Tensor* grad = context->Input<Tensor>(2);
 
   Tensor* output = context->Output(0, data_shape);
-  CUDA_RETURN_IF_ERROR(cudaMemset(output->MutableDataRaw(), 0, output->SizeInBytes()));
+  CUDA_RETURN_IF_ERROR(cudaMemsetAsync(output->MutableDataRaw(), 0, output->SizeInBytes(), Stream()));
   MLDataType T_type = grad->DataType();
   MLDataType Tin_type = indices->DataType();
 

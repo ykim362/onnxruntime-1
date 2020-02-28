@@ -11,6 +11,7 @@ namespace cuda {
 
 template <typename T, bool is_log_softmax>
 Status SoftMaxGradComputeHelper(
+    cudaStream_t stream,
     const T* dY,
     const TensorShape& input_shape,
     const T* Y,
@@ -30,7 +31,7 @@ Status SoftMaxGradComputeHelper(
   auto dX_data = reinterpret_cast<CudaT*>(dX);
 
   if (D <= 1024 && D * sizeof(T) <= 4096) {
-    dispatch_softmax_backward<CudaT, CudaT, AccType<T>, is_log_softmax>(dX_data, dY_data, Y_data, gsl::narrow_cast<int>(D), gsl::narrow_cast<int>(D), gsl::narrow_cast<int>(N));
+    dispatch_softmax_backward<CudaT, CudaT, AccType<T>, is_log_softmax>(stream, dX_data, dY_data, Y_data, gsl::narrow_cast<int>(D), gsl::narrow_cast<int>(D), gsl::narrow_cast<int>(N));
     return Status::OK();
   }
 
@@ -89,10 +90,10 @@ Status SoftmaxGrad<T>::ComputeInternal(OpKernelContext* ctx) const {
   T* dX_data = dX->template MutableData<T>();
 
   if (log_softmax_) {
-    return SoftMaxGradComputeHelper<T, true>(dY_data, input_shape, Y_data, dX_data, CudnnHandle(), axis_);
+    return SoftMaxGradComputeHelper<T, true>(Stream(), dY_data, input_shape, Y_data, dX_data, CudnnHandle(), axis_);
   }
   else {
-    return SoftMaxGradComputeHelper<T, false>(dY_data, input_shape, Y_data, dX_data, CudnnHandle(), axis_);
+    return SoftMaxGradComputeHelper<T, false>(Stream(), dY_data, input_shape, Y_data, dX_data, CudnnHandle(), axis_);
   }
 }
 

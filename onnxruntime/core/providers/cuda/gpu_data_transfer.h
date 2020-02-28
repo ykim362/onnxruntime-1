@@ -5,6 +5,7 @@
 
 #include "cuda_pch.h"
 #include "core/framework/data_transfer.h"
+#include "core/providers/cuda/cuda_execution_provider.h"
 
 namespace onnxruntime {
 
@@ -17,7 +18,7 @@ enum CUDAStreamType : int {
 
 class GPUDataTransfer : public IDataTransfer {
  public:
-  GPUDataTransfer();
+  GPUDataTransfer(const CUDAExecutionProvider* provider);
   ~GPUDataTransfer();
 
   bool CanCopy(const OrtDevice& src_device, const OrtDevice& dst_device) const override;
@@ -28,10 +29,15 @@ class GPUDataTransfer : public IDataTransfer {
 
   cudaStream_t GetStream(int queue_id) const {
     ORT_ENFORCE(queue_id >= 0 && queue_id < kTotalCudaStreams);
+
+    if (queue_id == kCudaStreamDefault) {
+      return provider_->PerThreadStream();
+    }
     return streams_[queue_id];
   }
 
  private:
+  const CUDAExecutionProvider* provider_;
   cudaStream_t streams_[kTotalCudaStreams];
 };
 

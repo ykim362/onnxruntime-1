@@ -1903,14 +1903,14 @@ void test_reduce_apis(int64_t size, float relative_error_tolerance = 1e-4f) {
 
   cudaMemcpy(device_input, input.data(), size * sizeof(float), cudaMemcpyHostToDevice);
 
-  onnxruntime::cuda::reduce_sum(device_input,
+  onnxruntime::cuda::reduce_sum(nullptr, device_input,
                                 device_output_sum,
                                 static_cast<int>(size),
                                 buffer);
-  onnxruntime::cuda::reduce_square_sum(device_input,
+  onnxruntime::cuda::reduce_square_sum(nullptr, device_input,
                                        device_output_square_sum,
                                        static_cast<int>(size), buffer);
-  onnxruntime::cuda::reduce_mean(
+  onnxruntime::cuda::reduce_mean(nullptr,
       device_input,
       device_output_mean,
       static_cast<int>(size),

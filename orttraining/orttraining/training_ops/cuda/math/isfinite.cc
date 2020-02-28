@@ -26,6 +26,7 @@ Status IsFiniteOp<TSrc>::ComputeInternal(OpKernelContext* context) const {
   const Tensor& input = *context->Input<Tensor>(0);
   Tensor& output = *context->Output(0, input.Shape());
   IsFinite(
+      Stream(),
       reinterpret_cast<const CudaTSrc*>(input.Data<TSrc>()),
       output.MutableData<bool>(), input.Shape().Size());
 
@@ -60,7 +61,7 @@ Status IsAllFiniteOp<TSrc>::ComputeInternal(OpKernelContext* context) const {
   // The GPU result will be copied later to the output which locates
   // on CPU memory.
   IAllocatorUniquePtr<bool> deviceOutput = GetScratchBuffer<bool>(1);
-  CUDA_RETURN_IF_ERROR(cudaMemset(deviceOutput.get(), int(true), sizeof(bool)));
+  CUDA_RETURN_IF_ERROR(cudaMemsetAsync(deviceOutput.get(), int(true), sizeof(bool), Stream()));
 
   std::vector<std::vector<void*>> grouped_tensor_pointers(total_tensor_count);
   std::vector<int> tensor_sizes(total_tensor_count);
@@ -77,18 +78,20 @@ Status IsAllFiniteOp<TSrc>::ComputeInternal(OpKernelContext* context) const {
   // Check if all values are finite and write true to deviceOutput.
   // Otherwise, false will be written.
   launch_multi_tensor_functor<1, TFunctor, bool*>(
-      2048 * 32, tensor_sizes, grouped_tensor_pointers, functor, deviceOutput.get());
+      Stream(), 2048 * 32, tensor_sizes, grouped_tensor_pointers, functor, deviceOutput.get());
 
   // Copy GPU result in deviceOutput to CPU memory.
   // Per this operator's schema, it's output is in CPU memory.
   Tensor& output = *context->Output(0, {});
   CUDA_RETURN_IF_ERROR(
-      cudaMemcpy(
+      cudaMemcpyAsync(
           output.MutableData<bool>(),
           deviceOutput.get(),
           sizeof(bool),
-          cudaMemcpyDeviceToHost));
-
+          cudaMemcpyDeviceToHost,
+          Stream()));
+  // cudaStreamSynchronize is needed since the value of output will be used by host after this function.
+  CUDA_RETURN_IF_ERROR(cudaStreamSynchronize(Stream()));
   return Status::OK();
 }
 

@@ -113,45 +113,45 @@ __global__ void CopyVectorHalf(const half* x, int incx, half* y, int incy, int n
 
 }  // namespace
 
-cublasStatus_t cublasTransposeHelper(cublasHandle_t, cublasOperation_t, cublasOperation_t, int m, int n, const half*, const half* A, int, const half*, const half*, int, half* C, int) {
+cublasStatus_t cublasTransposeHelper(cudaStream_t stream, cublasHandle_t, cublasOperation_t, cublasOperation_t, int m, int n, const half*, const half* A, int, const half*, const half*, int, half* C, int) {
   if (C != A) {
     dim3 dimGrid((n + TRANS_TILE_DIM - 1) / TRANS_TILE_DIM, (m + TRANS_TILE_DIM - 1) / TRANS_TILE_DIM, 1);
     dim3 dimBlock(TRANS_TILE_DIM, BLOCK_ROWS, 1);
 
-    transposeNoOverlap<<<dimGrid, dimBlock>>>(C, A, n, m);
+    transposeNoOverlap<<<dimGrid, dimBlock, 0, stream>>>(C, A, n, m);
   } else {
     return CUBLAS_STATUS_NOT_SUPPORTED;
   }
   return CUBLAS_STATUS_SUCCESS;
 }
 
-cublasStatus_t cublasCopyHelper(cublasHandle_t, int n, const half* x, int incx, half* y, int incy) {
+cublasStatus_t cublasCopyHelper(cudaStream_t stream, cublasHandle_t, int n, const half* x, int incx, half* y, int incy) {
   dim3 dimGrid((unsigned int)(n + COPY_BLOCK_DIM - 1) / COPY_BLOCK_DIM, 1, 1);
   dim3 dimBlock(COPY_BLOCK_DIM, 1, 1);
-  CopyVectorHalf<<<dimGrid, dimBlock>>>(x, incx, y, incy, n);
+  CopyVectorHalf<<<dimGrid, dimBlock, 0, stream>>>(x, incx, y, incy, n);
   return CUBLAS_STATUS_SUCCESS;
 }
 
-curandStatus_t curandGenerateUniformHelper(curandGenerator_t, half* outputPtr, size_t num) {
+curandStatus_t curandGenerateUniformHelper(cudaStream_t stream, curandGenerator_t, half* outputPtr, size_t num) {
   curandState* devStates;
   cudaMalloc((void**)&devStates, sizeof(curandState));
-  setup_state<<<1, 1>>>(devStates, time(NULL));  // What does curandGenerateUniform actually doing? should also pass in state here
+  setup_state<<<1, 1, 0, stream>>>(devStates, time(NULL));  // What does curandGenerateUniform actually doing? should also pass in state here
 
   dim3 dimGrid((unsigned int)(num + COPY_BLOCK_DIM - 1) / COPY_BLOCK_DIM, 1, 1);
   dim3 dimBlock(COPY_BLOCK_DIM, 1, 1);
-  GenerateUniformHalf<<<dimGrid, dimBlock>>>(devStates, outputPtr, (int)num);
+  GenerateUniformHalf<<<dimGrid, dimBlock, 0, stream>>>(devStates, outputPtr, (int)num);
 
   return (curandStatus_t)0;
 }
 
-curandStatus_t curandGenerateNormalHelper(curandGenerator_t, half* outputPtr, size_t n, half mean, half stddev) {
+curandStatus_t curandGenerateNormalHelper(cudaStream_t stream, curandGenerator_t, half* outputPtr, size_t n, half mean, half stddev) {
   curandState* devStates;
   cudaMalloc((void**)&devStates, sizeof(curandState));
-  setup_state<<<1, 1>>>(devStates, time(NULL));  // What does curandGenerateUniform actually doing? should also pass in state here
+  setup_state<<<1, 1, 0, stream>>>(devStates, time(NULL));  // What does curandGenerateUniform actually doing? should also pass in state here
 
   dim3 dimGrid((unsigned int)(n + COPY_BLOCK_DIM - 1) / COPY_BLOCK_DIM, 1, 1);
   dim3 dimBlock(COPY_BLOCK_DIM, 1, 1);
-  GenerateNormalHalf<<<dimGrid, dimBlock>>>(devStates, outputPtr, (int)n, mean, stddev);
+  GenerateNormalHalf<<<dimGrid, dimBlock, 0, stream>>>(devStates, outputPtr, (int)n, mean, stddev);
 
   return (curandStatus_t)0;
 }

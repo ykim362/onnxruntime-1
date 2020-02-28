@@ -44,6 +44,7 @@ class LambOptimizer final : public CudaKernel {
 // of this.
 template <typename T1, typename T2, typename T3, typename T_GRAD_NORM>
 void LambComputeDirection(
+    cudaStream_t stream,
     const T1* weights,
     const T2* grads,
     const T3* moment_1,
@@ -67,6 +68,7 @@ void LambComputeDirection(
 // of this.
 template <typename T1, typename T2, typename T3, typename T_MIXED_PRECISION_FP>
 void LambUpdate(
+    cudaStream_t stream,
     const T1* eta,
     const float ratio_min,
     const float ratio_max,
@@ -100,6 +102,7 @@ void LambUpdate(
 template <typename T1, typename T2, typename T3, typename T_GRAD_NORM>
 struct LambMultiTensorComputeDirectionFunctor {
   void operator()(
+      cudaStream_t stream,
       ChunkGroup<6> chunk_group,
       const T1* loss_scale,
       const T_GRAD_NORM* grad_norm,
@@ -126,7 +129,7 @@ struct LambMultiTensorComputeDirectionFunctor {
 //  d_norm: chunk_group.tensor_ptrs[3][i]
 template <typename TIn1, typename TIn2, typename TOut1, typename TOut2, typename TBuf>
 struct LambMultiTensorReductionFunctor {
-  void operator()(ChunkGroup<4> chunk_group);
+  void operator()(cudaStream_t stream, ChunkGroup<4> chunk_group);
 };
 
 // Lamb's stage 2 maps [w_norm, w_norm, w, d] to [w_new, g_new, w_mixed_precision_new] where
@@ -151,6 +154,7 @@ struct LambMultiTensorReductionFunctor {
 template <typename T1, typename T2, typename T3, typename T_MIXED_PRECISION_FP>
 struct LambMultiTensorUpdateFunctor {
   void operator()(
+      cudaStream_t stream,
       ChunkGroup<7> chunk_group,
       const T1* eta,
       const float ratio_min,

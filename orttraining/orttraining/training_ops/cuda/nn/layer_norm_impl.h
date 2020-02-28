@@ -31,6 +31,7 @@ namespace cuda {
 template <typename T, typename U>
 void HostApplyLayerNorm(
     const cudaDeviceProp& prop,
+    cudaStream_t stream,
     T* output,
     U* mean,
     U* invvar,
@@ -44,6 +45,7 @@ void HostApplyLayerNorm(
 template <typename T, typename U>
 void HostLayerNormGradient(
     const cudaDeviceProp& prop,
+    cudaStream_t stream,
     const T* dout,
     const T* input,
     const T* output,

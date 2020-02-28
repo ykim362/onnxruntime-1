@@ -82,6 +82,7 @@ Status Tile::ComputeInternal(OpKernelContext* ctx) const {
     if (input_tensor.IsDataType<float>() ||
         input_tensor.IsDataType<int32_t>()) {
       TileImpl(
+          Stream(),
           rank,
           fdm_input_shape,
           input_strides,
@@ -92,6 +93,7 @@ Status Tile::ComputeInternal(OpKernelContext* ctx) const {
     } else if (input_tensor.IsDataType<double>() ||
                input_tensor.IsDataType<int64_t>()) {
       TileImpl(
+          Stream(),
           rank,
           fdm_input_shape,
           input_strides,
@@ -101,6 +103,7 @@ Status Tile::ComputeInternal(OpKernelContext* ctx) const {
           output_tensor.Shape().Size());
     } else if (input_tensor.IsDataType<MLFloat16>()) {
       TileImpl(
+          Stream(),
           rank,
           fdm_input_shape,
           input_strides,

@@ -44,7 +44,8 @@ REGISTER_GRADIENT_KERNEL(TrainableDropoutGrad)
 
 template <typename T>
 struct DropoutGradComputeImpl {
-  void operator()(const int64_t N,
+  void operator()(cudaStream_t stream,
+                  const int64_t N,
                   const Tensor& dY,
                   const bool* mask_data,
                   const float ratio_data,
@@ -53,7 +54,7 @@ struct DropoutGradComputeImpl {
 
     const CudaT* dY_data = reinterpret_cast<const CudaT*>(dY.template Data<T>());
     CudaT* dX_data = reinterpret_cast<CudaT*>(dX.template MutableData<T>());
-    DropoutGradientKernelImpl<CudaT>(N, dY_data, mask_data, ratio_data, dX_data);
+    DropoutGradientKernelImpl<CudaT>(stream, N, dY_data, mask_data, ratio_data, dX_data);
   }
 };
 
@@ -77,7 +78,7 @@ Status DropoutGrad::ComputeInternal(OpKernelContext* context) const {
   auto dX = context->Output(0, shape);
 
   utils::MLTypeCallDispatcher<DropoutGradComputeImpl, float, MLFloat16, double> t_disp(dY->GetElementType());
-  t_disp.Invoke(N, *dY, mask_data, ratio_data, *dX);
+  t_disp.Invoke(Stream(), N, *dY, mask_data, ratio_data, *dX);
 
   return Status::OK();
 }
@@ -98,6 +99,7 @@ ONNX_OPERATOR_KERNEL_EX(
 template <typename T>
 struct BiasDropoutComputeImpl {
   Status operator()(const cudaDeviceProp& prop,
+                    cudaStream_t stream,
                     const int64_t N,
                     const fast_divmod fdm_dim,
                     const float ratio_data,
@@ -122,7 +124,7 @@ struct BiasDropoutComputeImpl {
 
     CudaT* Y_data = reinterpret_cast<CudaT*>(Y.template MutableData<T>());
 
-    BiasDropoutKernelImpl<CudaT>(prop, N, fdm_dim, ratio_data, generator, X_data, bias_data, residual_data, Y_data, mask_data);
+    BiasDropoutKernelImpl<CudaT>(prop, stream, N, fdm_dim, ratio_data, generator, X_data, bias_data, residual_data, Y_data, mask_data);
 
     return Status::OK();
   }
@@ -183,7 +185,7 @@ Status BiasDropout::ComputeInternal(OpKernelContext* context) const {
   PhiloxGenerator& generator = generator_ ? *generator_ : PhiloxGenerator::Default();
 
   utils::MLTypeCallDispatcherRet<Status, BiasDropoutComputeImpl, float, MLFloat16, double> t_disp(X->GetElementType());
-  return t_disp.Invoke(GetDeviceProp(), N, fdm_dim, ratio_data, generator, *X, *bias, residual, *Y, mask_data);
+  return t_disp.Invoke(GetDeviceProp(), Stream(), N, fdm_dim, ratio_data, generator, *X, *bias, residual, *Y, mask_data);
 }
 
 }  // namespace cuda

@@ -10,6 +10,7 @@ namespace cuda {
 
 template <typename T>
 void TileImpl(
+    cudaStream_t stream,
     const size_t shape_rank,
     const TArray<fast_divmod>& input_shape,
     const TArray<int64_t>& input_strides,

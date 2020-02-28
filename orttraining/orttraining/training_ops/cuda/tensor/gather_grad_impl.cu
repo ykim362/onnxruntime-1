@@ -84,12 +84,13 @@ void GatherGradImpl(
     ) {
   // allocate intermediate buffers
   auto original_indices = cuda_kernel.template GetScratchBuffer<Tin>(num_indices);
+  cudaStream_t stream = cuda_kernel.Stream();
 
   // initialize original_indices with [0, num_indices)
   {
     const auto blocks_per_grid = CeilDiv(num_indices, GridDim::maxThreadsPerBlock);
     cub::CountingInputIterator<Tin> counting_input(Tin{});
-    _Iota<<<blocks_per_grid, GridDim::maxThreadsPerBlock>>>(
+    _Iota<<<blocks_per_grid, GridDim::maxThreadsPerBlock, 0, stream>>>(
         counting_input, num_indices, original_indices.get());
   }
 
@@ -102,7 +103,7 @@ void GatherGradImpl(
       nullptr, sort_temp_storage_size_bytes,
       indices_data, indices_data_sorted.get(),
       original_indices.get(), original_indices_sorted.get(),
-      num_indices));
+      num_indices, 0, sizeof(Tin)*8, stream));
 
   auto sort_temp_storage = cuda_kernel.GetScratchBuffer<void>(sort_temp_storage_size_bytes);
 
@@ -110,12 +111,12 @@ void GatherGradImpl(
       sort_temp_storage.get(), sort_temp_storage_size_bytes,
       indices_data, indices_data_sorted.get(),
       original_indices.get(), original_indices_sorted.get(),
-      num_indices));
+      num_indices, 0, sizeof(Tin)*8, stream));
 
   dim3 block(GPU_WARP_SIZE, 4);
   dim3 grid(CeilDiv(num_indices, 4), CeilDiv(stride, 128));
 
-  _GatherGradImpl<<<grid, block>>>(
+  _GatherGradImpl<<<grid, block, 0, stream>>>(
       indices_data_sorted.get(),
       original_indices_sorted.get(),
       grad_data,

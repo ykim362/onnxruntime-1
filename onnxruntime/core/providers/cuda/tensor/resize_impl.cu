@@ -446,6 +446,7 @@ size_t CalcResizeBufferSize(const onnxruntime::UpsampleMode upsample_mode,
 
 template <typename T>
 void ResizeNearestImpl(
+    cudaStream_t stream,
     const int rank,
     TArray<int64_t>& input_shape,
     TArray<int64_t>& output_shape,
@@ -474,7 +475,7 @@ void ResizeNearestImpl(
     fast_divmod div_output_image = (rank > 2) ? output_div_pitches[rank - 3] : fast_divmod(output_height * output_width);
     int blocksPerDimsMappingGrid = static_cast<int>(ceil((output_height + output_width) / 32.0));
 
-    _ResizeNearestMappingKernel2D<T><<<blocksPerDimsMappingGrid, 32, 0>>>(
+    _ResizeNearestMappingKernel2D<T><<<blocksPerDimsMappingGrid, 32, 0, stream>>>(
         input_shape[rank - 2], input_shape[rank - 1],
         output_height, output_width,
         scales_vals[rank - 2], scales_vals[rank - 1],
@@ -483,7 +484,7 @@ void ResizeNearestImpl(
         extrapolation_enabled, transform_coordinate, calc_nearest_pixel,
         dims_mapping);
     if (extrapolation_enabled) {
-      _ResizeNearestKernel2D<T, true><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0>>>(
+      _ResizeNearestKernel2D<T, true><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, stream>>>(
           output_height, output_width,
           input_shape[rank - 2] * input_shape[rank - 1], input_shape[rank - 1],
           div_output_image, output_div_pitches[rank - 2],
@@ -491,7 +492,7 @@ void ResizeNearestImpl(
           extrapolation_value,
           dims_mapping);
     } else {
-      _ResizeNearestKernel2D<T, false><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0>>>(
+      _ResizeNearestKernel2D<T, false><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, stream>>>(
           output_height, output_width,
           input_shape[rank - 2] * input_shape[rank - 1], input_shape[rank - 1],
           div_output_image, output_div_pitches[rank - 2],
@@ -504,14 +505,14 @@ void ResizeNearestImpl(
 
   int64_t total_dim_sum = std::accumulate(output_shape.Data(), output_shape.Data() + rank, 0);
   int blocksPerDimsMappingGrid = (int)(ceil(static_cast<double>(total_dim_sum) / 32));
-  _ResizeNearestMappingKernel<T><<<blocksPerDimsMappingGrid, 32, 0>>>(
+  _ResizeNearestMappingKernel<T><<<blocksPerDimsMappingGrid, 32, 0, stream>>>(
       rank, input_shape, output_shape,
       scales_vals, roi_vals,
       total_dim_sum, extrapolation_enabled,
       transform_coordinate, calc_nearest_pixel,
       reinterpret_cast<int64_t*>(dims_mapping),
       reinterpret_cast<NearestMappingInfo*>(reinterpret_cast<int64_t*>(dims_mapping) + rank));
-  _ResizeNearestKernel<T><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0>>>(
+  _ResizeNearestKernel<T><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, stream>>>(
       rank, input_strides, output_div_pitches,
       input_data, output_data, N,
       extrapolation_value,
@@ -522,6 +523,7 @@ void ResizeNearestImpl(
 
 template <typename T>
 void ResizeImpl(
+    cudaStream_t stream,
     const UpsampleMode upsample_mode,
     const int rank,
     TArray<int64_t>& input_shape,
@@ -543,7 +545,7 @@ void ResizeImpl(
   bool isSame = std::all_of(scales_vals.Data(), scales_vals.Data() + rank, [](float v) { return v == 1.0f; }) &&
                 (coordinate_transform_mode != ResizeCoordinateTransformationMode::TF_CROP_AND_RESIZE);
   if (isSame) {
-    cudaMemcpyAsync(output_data, input_data, N * sizeof(T), cudaMemcpyDeviceToDevice);
+    cudaMemcpyAsync(output_data, input_data, N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return;
   }
 
@@ -551,7 +553,7 @@ void ResizeImpl(
   CudaFunctionNearestPixel calc_nearest_pixel = GetDeviceNearstPixelFunction(nearest_mode);
   if (upsample_mode == UpsampleMode::NN) {
     ResizeNearestImpl(
-        rank, input_shape, output_shape, input_strides, output_div_pitches,
+        stream, rank, input_shape, output_shape, input_strides, output_div_pitches,
         scales_vals, roi_vals, input_data, output_data, N,
         extrapolation_enabled, extrapolation_value, cubic_coeff_a,
         transform_coordinate, calc_nearest_pixel,
@@ -567,7 +569,7 @@ void ResizeImpl(
   int blocksPerDimsMappingGrid = (int)(ceil((output_height + output_width) / 32.0));
   switch (upsample_mode) {
     case UpsampleMode::LINEAR:
-      _ResizeBilinearCoordinateMapping<T><<<blocksPerDimsMappingGrid, 32, 0>>>(
+      _ResizeBilinearCoordinateMapping<T><<<blocksPerDimsMappingGrid, 32, 0, stream>>>(
           input_shape[rank - 2], input_shape[rank - 1],
           output_height, output_width,
           scales_vals[rank - 2], scales_vals[rank - 1],
@@ -575,7 +577,7 @@ void ResizeImpl(
           roi_vals[rank - 1], roi_vals[rank - 1 + rank],
           output_height + output_width, extrapolation_enabled, transform_coordinate,
           reinterpret_cast<BilinearMappingInfo*>(dims_mapping));
-      _ResizeBilinearKernel<T><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0>>>(
+      _ResizeBilinearKernel<T><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, stream>>>(
           input_shape[rank - 2], input_shape[rank - 1],
           output_height, output_width,
           output_div_pitches[rank - 2], div_output_image,
@@ -583,7 +585,7 @@ void ResizeImpl(
           reinterpret_cast<BilinearMappingInfo*>(dims_mapping));
       return;
     case UpsampleMode::CUBIC:
-      _ResizeCubicCoordinateMapping<T><<<blocksPerDimsMappingGrid, 32, 0>>>(
+      _ResizeCubicCoordinateMapping<T><<<blocksPerDimsMappingGrid, 32, 0, stream>>>(
           input_shape[rank - 2], input_shape[rank - 1],
           output_height, output_width,
           scales_vals[rank - 2], scales_vals[rank - 1],
@@ -592,7 +594,7 @@ void ResizeImpl(
           output_height + output_width, extrapolation_enabled,
           cubic_coeff_a, exclude_outside, transform_coordinate,
           reinterpret_cast<CubicMappingInfo*>(dims_mapping));
-      _ResizeBiCubicKernel<T><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0>>>(
+      _ResizeBiCubicKernel<T><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, stream>>>(
           input_shape[rank - 2], input_shape[rank - 1],
           output_height, output_width,
           output_div_pitches[rank - 2], div_output_image,
@@ -604,6 +606,7 @@ void ResizeImpl(
 
 #define SPECIALIZED_IMPL(T)                                         \
   template void ResizeImpl<T>(                                      \
+      cudaStream_t stream,                                    \
       const UpsampleMode upsample_mode,                             \
       const int rank,                                               \
       TArray<int64_t>& input_shape,                                 \

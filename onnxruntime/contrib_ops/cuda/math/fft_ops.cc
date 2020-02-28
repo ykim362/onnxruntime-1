@@ -131,7 +131,7 @@ Status FFTBase<T>::DoFFT(OpKernelContext* context, const Tensor* X, bool complex
   CUFFT_RETURN_IF_ERROR(cufftXtExec(plan_info.plan, const_cast<CudaT*>(x_data), y_data, inverse ? CUFFT_INVERSE : CUFFT_FORWARD));
 
   if (inverse) {
-    PostProcess(signal_dims, output_size, y_data);
+    PostProcess(Stream(), signal_dims, output_size, y_data);
   }
 
   return Status::OK();

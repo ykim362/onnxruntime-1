@@ -339,6 +339,7 @@ __global__ void cuApplyLayerNorm(
 template <typename T, typename U>
 void HostApplyLayerNorm(
     const cudaDeviceProp& prop,
+    cudaStream_t stream,
     T* output,
     U* mean,
     U* invvar,
@@ -356,7 +357,7 @@ void HostApplyLayerNorm(
   const dim3 blocks(1, std::min((uint64_t)n1, maxGridY), 1);
   int nshared =
       threads.y > 1 ? threads.y * sizeof(U) + (threads.y / 2) * sizeof(U) : 0;
-  cuApplyLayerNorm<<<blocks, threads, nshared, 0>>>(
+  cuApplyLayerNorm<<<blocks, threads, nshared, stream>>>(
       output,
       mean,
       invvar,
@@ -367,7 +368,7 @@ void HostApplyLayerNorm(
 }
 
 #define LAYERNORM_LINEAR_IMPL(T, U)                                                                       \
-  template void HostApplyLayerNorm(const cudaDeviceProp& prop, T* output, U* mean, U* invvar, const T* input, int64_t n1, int64_t n2, \
+  template void HostApplyLayerNorm(const cudaDeviceProp& prop, cudaStream_t stream, T* output, U* mean, U* invvar, const T* input, int64_t n1, int64_t n2, \
                                    double epsilon, const T* gamma, const T* beta);
 
 LAYERNORM_LINEAR_IMPL(float, float)
@@ -740,6 +741,7 @@ __global__ void cuComputeGradInput(
 template <typename T, typename U>
 void HostLayerNormGradient(
   const cudaDeviceProp& prop,
+  cudaStream_t stream,
   const T* dout,
   const T* input,
   const T* output,
@@ -765,7 +767,7 @@ void HostLayerNormGradient(
   const int nshared2 = nshared2_a > nshared2_b ? nshared2_a : nshared2_b;
 
   if (mean == nullptr) {
-    cuComputePartGradGammaBeta<T, U, false><<<blocks2, threads2, nshared2, 0>>>(
+    cuComputePartGradGammaBeta<T, U, false><<<blocks2, threads2, nshared2, stream>>>(
       dout,
       input,
       output,
@@ -777,7 +779,7 @@ void HostLayerNormGradient(
       part_grad_gamma,
       part_grad_beta);
   } else {
-    cuComputePartGradGammaBeta<T, U, true><<<blocks2, threads2, nshared2, 0>>>(
+    cuComputePartGradGammaBeta<T, U, true><<<blocks2, threads2, nshared2, stream>>>(
       dout,
       input,
       output,
@@ -793,7 +795,7 @@ void HostLayerNormGradient(
   const dim3 threads3(warp_size, 8, 1);
   const dim3 blocks3((n2 + threads2.x - 1) / threads2.x, 1, 1);
   const int nshared3 = threads3.x * threads3.y * sizeof(U);
-  cuComputeGradGammaBeta<<<blocks3, threads3, nshared3, 0>>>(
+  cuComputeGradGammaBeta<<<blocks3, threads3, nshared3, stream>>>(
       part_grad_gamma,
       part_grad_beta,
       part_size,
@@ -808,7 +810,7 @@ void HostLayerNormGradient(
   int nshared =
       threads1.y > 1 ? threads1.y * threads1.x * sizeof(U) : 0;
   if (mean == nullptr) {
-    cuComputeGradInput<T, U, false><<<blocks1, threads1, nshared, 0>>>(
+    cuComputeGradInput<T, U, false><<<blocks1, threads1, nshared, stream>>>(
       dout,
       input,
       output,
@@ -819,7 +821,7 @@ void HostLayerNormGradient(
       n1, n2,
       grad_input);
   } else {
-    cuComputeGradInput<T, U, true><<<blocks1, threads1, nshared, 0>>>(
+    cuComputeGradInput<T, U, true><<<blocks1, threads1, nshared, stream>>>(
         dout,
         input,
         output,
@@ -833,7 +835,7 @@ void HostLayerNormGradient(
 }
 
 #define LAYERNORMGRAD_IMPL(T, U)                                                                                                              \
-  template void HostLayerNormGradient(const cudaDeviceProp& prop, const T* dout, const T* input, const T* output,                             \
+  template void HostLayerNormGradient(const cudaDeviceProp& prop, cudaStream_t stream, const T* dout, const T* input, const T* output,                             \
                                       const T* gamma, const T* beta, const U* mean, const U* invvar, int64_t n1, int64_t n2,                  \
                                       T* grad_input, T* grad_gamma, T* grad_beta, U* part_grad_gamma, U* part_grad_beta, const int part_size);
 

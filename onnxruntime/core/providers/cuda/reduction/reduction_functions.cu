@@ -199,7 +199,7 @@ __global__ void reduce_all_kernel(const int size, const TIn * data, TOut* output
 }
 
 template<typename TIn, typename TOut, typename TOp, typename TFinalOp, bool DivideResultBySize>
-void call_reduce_all_kernel(const TIn *data, TOut *output, int size, TOut *buffer) {
+void call_reduce_all_kernel(cudaStream_t stream, const TIn *data, TOut *output, int size, TOut *buffer) {
   const auto block_size = compute_block_size(size);
   const int num_blocks = compute_grid_size(size);
   const dim3 block(block_size.first, block_size.second, 1);
@@ -207,64 +207,64 @@ void call_reduce_all_kernel(const TIn *data, TOut *output, int size, TOut *buffe
 
   // If more than one blocks are used, then inter-blocks reduction is needed.
   if (num_blocks != 1) {
-    cudaMemset(buffer + num_blocks, 0, sizeof(int));
+    CUDA_CALL_THROW(cudaMemsetAsync(buffer + num_blocks, 0, sizeof(int), stream));
   }
 
   const int shared_mem_size = sizeof(TOut) * block_size.first * block_size.second / GPU_WARP_SIZE;
-  reduce_all_kernel<TIn, TOut, TOp, TFinalOp, DivideResultBySize><<<grid, block, shared_mem_size>>>(size, data, output, buffer);
+  reduce_all_kernel<TIn, TOut, TOp, TFinalOp, DivideResultBySize><<<grid, block, shared_mem_size, stream>>>(size, data, output, buffer);
 }
 
 template <typename TIn, typename TOut>
-void reduce_sum(const TIn* data, TOut* output, int size, TOut* buffer) {
+void reduce_sum(cudaStream_t stream, const TIn* data, TOut* output, int size, TOut* buffer) {
   call_reduce_all_kernel<TIn, TOut, Cast<TOut, TIn>, Identity<TOut>, false>(
-      data, output, size, buffer);
+    stream, data, output, size, buffer);
 }
 
 template <typename TIn, typename TOut>
-void reduce_square_sum(const TIn* data, TOut* output, int size, TOut* buffer) {
+void reduce_square_sum(cudaStream_t stream, const TIn* data, TOut* output, int size, TOut* buffer) {
   call_reduce_all_kernel<TIn, TOut, Square<TOut, TIn>, Identity<TOut>, false>(
-      data, output, size, buffer);
+    stream, data, output, size, buffer);
 }
 
 template <typename TIn, typename TOut>
-void reduce_l2_norm(const TIn* data, TOut* output, int size, TOut* buffer) {
+void reduce_l2_norm(cudaStream_t stream, const TIn* data, TOut* output, int size, TOut* buffer) {
   call_reduce_all_kernel<TIn, TOut, Square<TOut, TIn>, Sqrt<TOut>, false>(
-      data, output, size, buffer);
+    stream, data, output, size, buffer);
 }
 
 template <typename TIn, typename TOut>
-void reduce_mean(const TIn* data, TOut* output, int size, TOut* buffer) {
+void reduce_mean(cudaStream_t stream, const TIn* data, TOut* output, int size, TOut* buffer) {
   call_reduce_all_kernel<TIn, TOut, Cast<TOut, TIn>, Identity<TOut>, true>(
-      data, output, size, buffer);
+    stream, data, output, size, buffer);
 }
 
 template void reduce_sum<half, float>(
-    const half* data, float* output, int size, float* buffer);
+  cudaStream_t stream, const half* data, float* output, int size, float* buffer);
 template void reduce_sum<float, float>(
-    const float* data, float* output, int size, float* buffer);
+  cudaStream_t stream, const float* data, float* output, int size, float* buffer);
 template void reduce_sum<double, double>(
-    const double* data, double* output, int size, double* buffer);
+  cudaStream_t stream, const double* data, double* output, int size, double* buffer);
 
 template void reduce_square_sum<half, float>(
-    const half* data, float* output, int size, float* buffer);
+  cudaStream_t stream, const half* data, float* output, int size, float* buffer);
 template void reduce_square_sum<float, float>(
-    const float* data, float* output, int size, float* buffer);
+  cudaStream_t stream, const float* data, float* output, int size, float* buffer);
 template void reduce_square_sum<double, double>(
-    const double* data, double* output, int size, double* buffer);
+  cudaStream_t stream, const double* data, double* output, int size, double* buffer);
 
 template void reduce_l2_norm<half, float>(
-    const half* data, float* output, int size, float* buffer);
+  cudaStream_t stream, const half* data, float* output, int size, float* buffer);
 template void reduce_l2_norm<float, float>(
-    const float* data, float* output, int size, float* buffer);
+  cudaStream_t stream, const float* data, float* output, int size, float* buffer);
 template void reduce_l2_norm<double, double>(
-    const double* data, double* output, int size, double* buffer);
+  cudaStream_t stream, const double* data, double* output, int size, double* buffer);
 
 template void reduce_mean<half, float>(
-    const half* data, float* output, int size, float* buffer);
+  cudaStream_t stream, const half* data, float* output, int size, float* buffer);
 template void reduce_mean<float, float>(
-    const float* data, float* output, int size, float* buffer);
+  cudaStream_t stream, const float* data, float* output, int size, float* buffer);
 template void reduce_mean<double, double>(
-    const double* data, double* output, int size, double* buffer);
+  cudaStream_t stream, const double* data, double* output, int size, double* buffer);
 
 bool is_matrix_row_reduction(
     const cudnnReduceTensorOp_t cudnn_reduce_op,
@@ -352,7 +352,7 @@ __global__ void reduce_matrix_rows_kernel(const TIn* input, TOut* output, int m,
 // For example, [N, C, H, W]-tensor may lead to a output [W]-tensor.
 // It's implementation is in reduction_ops.cu and called in reduction_ops.cc.
 template <typename TIn, typename TOut, typename TBuf>
-void call_reduce_matrix_rows(const TIn* input, TOut* output, int m, int n) {
+void call_reduce_matrix_rows(cudaStream_t stream, const TIn* input, TOut* output, int m, int n) {
   constexpr int max_num_threads_in_block = 512;
   constexpr int max_num_blocks_in_grid = 512;
   constexpr int load_count_per_thread = 4;
@@ -365,24 +365,24 @@ void call_reduce_matrix_rows(const TIn* input, TOut* output, int m, int n) {
   const dim3 grid(grid_x_dim, grid_y_dim, 1);
   const dim3 block(block_x_dim, block_y_dim, 1);
 
-  reduce_matrix_rows_kernel<TIn, TOut, TBuf><<<grid, block, block.y * block.x * sizeof(TBuf)>>>(
+  reduce_matrix_rows_kernel<TIn, TOut, TBuf><<<grid, block, block.y * block.x * sizeof(TBuf), stream>>>(
       input, output, m, n);
 }
 
 template <typename TIn, typename TOut>
-void reduce_matrix_rows(const TIn* data, TOut* output, int m, int n) {
-  call_reduce_matrix_rows<TIn, TOut, TOut>(data, output, m, n);
+void reduce_matrix_rows(cudaStream_t stream, const TIn* data, TOut* output, int m, int n) {
+  call_reduce_matrix_rows<TIn, TOut, TOut>(stream, data, output, m, n);
 }
 
 template <>
-void reduce_matrix_rows<half, half>(const half* data, half* output, int m, int n) {
-  call_reduce_matrix_rows<half, half, float>(data, output, m, n);
+void reduce_matrix_rows<half, half>(cudaStream_t stream, const half* data, half* output, int m, int n) {
+  call_reduce_matrix_rows<half, half, float>(stream, data, output, m, n);
 }
 
 template void reduce_matrix_rows<float, float>(
-    const float* data, float* output, int m, int n);
+  cudaStream_t stream, const float* data, float* output, int m, int n);
 template void reduce_matrix_rows<double, double>(
-    const double* data, double* output, int m, int n);
+  cudaStream_t stream, const double* data, double* output, int m, int n);
 
 }  // namespace cuda
 }  // namespace onnxruntime

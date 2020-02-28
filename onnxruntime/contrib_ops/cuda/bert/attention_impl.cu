@@ -721,6 +721,7 @@ bool QkvToContext(
 
 bool LaunchAttentionKernel(
     const cudaDeviceProp& prop,
+    cudaStream_t stream,
     const void* input,
     const int* mask_index,
     const std::vector<int64_t>* mask_index_dims,
@@ -736,9 +737,6 @@ bool LaunchAttentionKernel(
     int past_sequence_length,
     const void* past,
     void* present) {
-  // use default stream
-  const cudaStream_t stream = nullptr;
-
   if (element_size == 2) {
     return QkvToContext(prop, cublas, stream,
                         batch_size, sequence_length, num_heads, head_size, element_size,

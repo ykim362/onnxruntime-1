@@ -53,7 +53,7 @@ Status ReduceAllL2<TIn, TOut>::ComputeInternal(OpKernelContext* ctx) const {
   // Allocate output tensor.
   Tensor* output = ctx->Output(0, {});
   CudaTOut* p_output = reinterpret_cast<CudaTOut*>(output->template MutableData<TOut>());
-  ORT_ENFORCE(cudaMemset(p_output, 0, sizeof(CudaTOut)) == cudaSuccess);
+  ORT_ENFORCE(cudaMemsetAsync(p_output, 0, sizeof(CudaTOut), Stream()) == cudaSuccess);
 
   auto ctx_internal = static_cast<OpKernelContextInternal*>(ctx);
   bool deterministic = ctx_internal && ctx_internal->GetUseDeterministicCompute();
@@ -65,12 +65,12 @@ Status ReduceAllL2<TIn, TOut>::ComputeInternal(OpKernelContext* ctx) const {
 
     // Check if all values are finite and write true to deviceOutput.
     // Otherwise, false will be written.
-    launch_multi_tensor_functor<1, TFunctor, CudaTOut*>(
+    launch_multi_tensor_functor<1, TFunctor, CudaTOut*>(Stream(),
         2048 * 32, tensor_sizes, grouped_tensor_pointers, functor, p_output);
 
     // *p_output is the squared sum of all elements.
     // Let's take a sqrt to get the actual L2-norm.
-    ScalarSqrt(p_output, p_output);
+    ScalarSqrt(Stream(), p_output, p_output);
   }
   else {
 
@@ -91,7 +91,7 @@ Status ReduceAllL2<TIn, TOut>::ComputeInternal(OpKernelContext* ctx) const {
 
     // create GPU scratch space and zero target for each tensor square norm
     uint8_t* p_scratch = GetScratchBuffer<uint8_t>(scratch_size).get();
-    ORT_ENFORCE(cudaMemset(p_scratch, 0, sizeof(CudaTAcc)*(1 + total_tensor_count)) == cudaSuccess);
+    ORT_ENFORCE(cudaMemsetAsync(p_scratch, 0, sizeof(CudaTAcc)*(1 + total_tensor_count), Stream()) == cudaSuccess);
 
     CudaTAcc* p_global_sqnorm = reinterpret_cast<CudaTAcc*>(p_scratch);
     CudaTAcc* p_tensor_sqnorm = p_global_sqnorm + 1;
@@ -100,10 +100,10 @@ Status ReduceAllL2<TIn, TOut>::ComputeInternal(OpKernelContext* ctx) const {
     // perform reduction l2norm = sqrt[sum(tensor[i][j]**2)] for i,j over all tensor elements
     for (int i = 0; i < total_tensor_count; ++i) {
       CudaTIn* p_tensor_i = reinterpret_cast<CudaTIn*>(grouped_tensor_pointers[i][0]);
-      reduce_square_sum(p_tensor_i, p_tensor_sqnorm + i, tensor_sizes[i], p_reduce_buffer);
+      reduce_square_sum(Stream(), p_tensor_i, p_tensor_sqnorm + i, tensor_sizes[i], p_reduce_buffer);
     }
-    reduce_sum(p_tensor_sqnorm, p_global_sqnorm, total_tensor_count, p_reduce_buffer);
-    ScalarSqrt(p_global_sqnorm, p_output);
+    reduce_sum(Stream(), p_tensor_sqnorm, p_global_sqnorm, total_tensor_count, p_reduce_buffer);
+    ScalarSqrt(Stream(), p_global_sqnorm, p_output);
   }
 
   return Status::OK();
