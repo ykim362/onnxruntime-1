@@ -30,9 +30,7 @@ ImageScaler<T>::ImageScaler(const OpKernelInfo& info) : CudaKernel(info) {
   ORT_ENFORCE(info.GetAttrs<float>("bias", bias_).IsOK());
 
   b_data_ = GetScratchBuffer<float>(bias_.size());
-  CUDA_CALL_THROW(cudaStreamSynchronize(Stream()));
   CUDA_CALL_THROW(cudaMemcpyAsync(b_data_.get(), bias_.data(), sizeof(float) * bias_.size(), cudaMemcpyHostToDevice, Stream()));
-  CUDA_CALL_THROW(cudaStreamSynchronize(Stream()));
 }
 
 template <typename T>

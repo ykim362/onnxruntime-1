@@ -43,7 +43,6 @@ Status ComputeMatrixOffsets(cudaStream_t stream, T* workspace_data, size_t num_b
     workspace_data += matrix_size;
   }
 
-  CUDA_RETURN_IF_ERROR(cudaStreamSynchronize(stream));
   CUDA_RETURN_IF_ERROR(cudaMemcpyAsync(matrix_ptrs.get(), cuda_ptrs.data(), sizeof(T*) * num_batches,
                                        cudaMemcpyHostToDevice, stream));
   return Status::OK();
