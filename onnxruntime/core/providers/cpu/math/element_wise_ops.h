@@ -875,10 +875,12 @@ class BroadcastHelper {
   // top level broadcaster
   BroadcastHelper(InputBroadcaster& input_broadcaster,
                   OutputBroadcaster& output_broadcaster,
-                  concurrency::ThreadPool* tp = nullptr)
+                  concurrency::ThreadPool* tp = nullptr,
+                  double unit_cost = 0.0)
       : input_broadcaster_(input_broadcaster),
         output_broadcaster_(output_broadcaster),
-        threadpool_(tp) {
+        threadpool_(tp),
+        unit_cost_(unit_cost) {
   }
 
   // ctor for use when we parallelize within a span
@@ -914,6 +916,7 @@ class BroadcastHelper {
 
   size_t Input0ElementSize() const { return input_broadcaster_.Input0ElementSize(); }
   size_t Input1ElementSize() const { return input_broadcaster_.Input1ElementSize(); }
+
   size_t OutputElementSize() const { return output_broadcaster_.OutputElementSize(); }
   size_t NumOutputElements() const { return output_broadcaster_.NumOutputElements(); }
 
@@ -942,6 +945,7 @@ class BroadcastHelper {
   bool NeedMoreOutput() const { return output_broadcaster_; }
 
   concurrency::ThreadPool* Threadpool() const { return threadpool_; }
+  double UnitCost() const { return unit_cost_; }
 
  private:
   InputBroadcaster& input_broadcaster_;
@@ -949,6 +953,7 @@ class BroadcastHelper {
 
   // info required if we parallelize within a span
   concurrency::ThreadPool* threadpool_{nullptr};
+  double unit_cost_{0.0};
   size_t input0_offset_{0};
   size_t input0_num_elements_{input_broadcaster_.GetSpanSize()};  // default all to getting one full span
   size_t input1_offset_{0};
@@ -963,12 +968,13 @@ void ParallelizeSingleSpan(BroadcastHelper& helper,
                            const Input0ScalarFunc& input0scalar,
                            const Input1ScalarFunc& input1scalar,
                            const GeneralFunc& general) {
+  TensorOpCost cost{static_cast<float>(std::max(helper.Input0ElementSize(), helper.Input1ElementSize())),
+                    static_cast<float>(helper.OutputElementSize()),
+                    helper.UnitCost()};
+
   if (helper.IsInput0Scalar()) {
     concurrency::ThreadPool::TryParallelFor(
-        helper.Threadpool(), helper.NumOutputElements(),
-        TensorOpCost{static_cast<float>(helper.Input1ElementSize()),
-                     static_cast<float>(helper.OutputElementSize()),
-                     unit_cost},
+        helper.Threadpool(), helper.NumOutputElements(), cost,
         [&helper, &input0scalar](std::ptrdiff_t first, std::ptrdiff_t last) {
           size_t count = static_cast<size_t>(last - first);
           // offset=0, num_elements=1 for the scalar input0
@@ -977,10 +983,7 @@ void ParallelizeSingleSpan(BroadcastHelper& helper,
         });
   } else if (helper.IsInput1Scalar()) {
     concurrency::ThreadPool::TryParallelFor(
-        helper.Threadpool(), helper.NumOutputElements(),
-        TensorOpCost{static_cast<float>(helper.Input0ElementSize()),
-                     static_cast<float>(helper.OutputElementSize()),
-                     unit_cost},
+        helper.Threadpool(), helper.NumOutputElements(), cost,
         [&helper, &input1scalar](std::ptrdiff_t first, std::ptrdiff_t last) {
           size_t count = static_cast<size_t>(last - first);
           // offset=0, num_elements=1 for the scalar input1
@@ -990,10 +993,7 @@ void ParallelizeSingleSpan(BroadcastHelper& helper,
 
   } else {
     concurrency::ThreadPool::TryParallelFor(
-        helper.Threadpool(), helper.NumOutputElements(),
-        TensorOpCost{static_cast<float>(std::max(helper.Input0ElementSize(), helper.Input1ElementSize())),
-                     static_cast<float>(helper.OutputElementSize()),
-                     unit_cost},
+        helper.Threadpool(), helper.NumOutputElements(), cost,
         [&helper, &general](std::ptrdiff_t first, std::ptrdiff_t last) {
           size_t count = static_cast<size_t>(last - first);
           BroadcastHelper segment_helper(helper, first, count, first, count, first, count);
@@ -1206,7 +1206,7 @@ Status BroadcastVariadic(const Node& node, OpKernelContext& context, Input0Scala
 
 // Broadcasting with no parallelization
 template <typename LoopFunc>
-Status GenericBroadcastTwo(OpKernelContext& context, const LoopFunc& func) {
+Status UntypedBroadcastTwo(OpKernelContext& context, const LoopFunc& func) {
   InputBroadcaster input_broadcaster(*context.Input<Tensor>(0), *context.Input<Tensor>(1));
   OutputBroadcaster output_broadcaster(input_broadcaster.GetSpanSize(),
                                        *context.Output(0, input_broadcaster.GetOutputShape()));
@@ -1216,17 +1216,20 @@ Status GenericBroadcastTwo(OpKernelContext& context, const LoopFunc& func) {
   return Status::OK();
 }
 
+// Parallelized broadcasting.
 template <typename LoopFunc>
-Status GenericBroadcastTwoParallelized(OpKernelContext& context, const LoopFunc& func, double unit_cost) {
+Status UntypedBroadcastTwo(OpKernelContext& context, const LoopFunc& func, double unit_cost) {
   const Tensor& input0_tensor = *context.Input<Tensor>(0);
   const Tensor& input1_tensor = *context.Input<Tensor>(1);
   InputBroadcaster input_broadcaster(input0_tensor, input1_tensor);
-  size_t span_size = input_broadcaster.GetSpanSize();
 
-  const Tensor& output_tensor = *context.Output(0, input_broadcaster.GetOutputShape());
+  Tensor& output_tensor = *context.Output(0, input_broadcaster.GetOutputShape());
+
+  size_t span_size = input_broadcaster.GetSpanSize();
+  size_t output_size = output_tensor.Shape().Size();
 
   // one or more zero dimensions so nothing more to do
-  if (output_tensor.Shape().Size() == 0) {
+  if (output_size == 0) {
     return Status::OK();
   }
 
@@ -1236,29 +1239,21 @@ Status GenericBroadcastTwoParallelized(OpKernelContext& context, const LoopFunc&
 
   concurrency::ThreadPool* tp = context.GetOperatorThreadPool();
 
-  if (broadcast_helper.SingleSpanOutput()) {  // Only one big span for all data, parallel inside it
+  if (span_size == output_size) {  // Only one big span for all data, parallelize inside the span
     OutputBroadcaster output_broadcaster(span_size, output_tensor);
     BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster, tp);
     func(broadcast_helper);
   } else {
-    //concurrency::ThreadPool::TryParallelFor(
-    //    tp, output_size / span_size,
-    //    {static_cast<float>(sizeof(TInput)) * span_size, static_cast<float>(sizeof(TOutput)) * span_size, unit_cost * span_size},
-    //    [=, &bc, &output_tensor](std::ptrdiff_t first_span, std::ptrdiff_t last_span) {
-    //      TBroadcaster<TInput, TInput> span_bc(bc);
-    //      TBroadcastOutput<TOutput> span_output(span_size, output_tensor, first_span * span_size, last_span * span_size);
-    //      span_bc.AdvanceBy(first_span * span_size);
-    //      BroadcastLoop(span_bc, span_output, input0scalar, input1scalar, general);
-    //    });
-
     // enforce const on input broadcaster we copy from
     const InputBroadcaster& const_input_broadcaster = input_broadcaster;
+
     concurrency::ThreadPool::TryParallelFor(
-        tp, output_tensor.Shape().Size() / span_size,
+        tp, output_size / span_size,
         TensorOpCost{static_cast<float>(input_broadcaster.Input0ElementSize()) * span_size,
-                     static_cast<float>(output_broadcaster.OutputElementSize()) * span_size,
+                     static_cast<float>(output_tensor.DataType()->Size()) * span_size,
                      unit_cost * span_size},
-        [&const_input_broadcaster, &func](std::ptrdiff_t first_span, std::ptrdiff_t last_span) {
+        [span_size, &const_input_broadcaster, &output_tensor, &func](std::ptrdiff_t first_span,
+                                                                     std::ptrdiff_t last_span) {
           // copy from original and advance
           InputBroadcaster segment_input_broadcaster(const_input_broadcaster);
           segment_input_broadcaster.AdvanceBy(first_span * span_size);
@@ -1267,7 +1262,7 @@ Status GenericBroadcastTwoParallelized(OpKernelContext& context, const LoopFunc&
           OutputBroadcaster segment_output_broadcaster(span_size, output_tensor,
                                                        first_span * span_size, last_span * span_size);
 
-          BroadcastHelper segment_helper(segment_input_broadcaster, output_broadcaster);
+          BroadcastHelper segment_helper(segment_input_broadcaster, segment_output_broadcaster);
           func(segment_helper);
         });
   }

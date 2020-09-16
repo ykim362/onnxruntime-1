@@ -232,16 +232,8 @@ Status Add<T>::Compute(OpKernelContext* context) const {
         });
   };
 
-  auto status = GenericBroadcastTwo(*context, looper);
+  auto status = UntypedBroadcastTwo(*context, looper, 1.0f);
   return status;
-  /*
-  return BroadcastTwo<T, T>(
-      *context,
-      [](EigenVectorMap<T> output, T input0, ConstEigenVectorMap<T> input1) { output = input0 + input1.array(); },
-      [](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, T input1) { output = input0.array() + input1; },
-      [](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, ConstEigenVectorMap<T> input1) { output = input0 + input1; },
-      1.0f);
-      */
 }
 
 template <typename T>
