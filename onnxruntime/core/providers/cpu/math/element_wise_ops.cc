@@ -220,14 +220,15 @@ Status Add<T>::Compute(OpKernelContext* context) const {
   const auto looper = [](BroadcastHelper& helper) {
     BroadcastLooper(
         helper,
-        [&helper]() {
-          helper.NextOutputEigen<T>() = helper.NextScalarInput0<T>() + helper.NextEigenInput1<T>().array();
+        // BroadcastHelper received as argument may differ from 'helper' when parallelizing within a span
+        [](BroadcastHelper& iter_helper) {
+          iter_helper.OutputEigen<T>() = iter_helper.ScalarInput0<T>() + iter_helper.EigenInput1<T>().array();
         },
-        [&helper]() {
-          helper.NextOutputEigen<T>() = helper.NextEigenInput0<T>().array() + helper.NextScalarInput1<T>();
+        [](BroadcastHelper& iter_helper) {
+          iter_helper.OutputEigen<T>() = iter_helper.EigenInput0<T>().array() + iter_helper.ScalarInput1<T>();
         },
-        [&helper]() {
-          helper.NextOutputEigen<T>() = helper.NextEigenInput0<T>() + helper.NextEigenInput1<T>();
+        [](BroadcastHelper& iter_helper) {
+          iter_helper.OutputEigen<T>() = iter_helper.EigenInput0<T>() + iter_helper.EigenInput1<T>();
         });
   };
 
