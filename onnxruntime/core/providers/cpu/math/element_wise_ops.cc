@@ -19,7 +19,6 @@ void Exp<float>::operator()(std::ptrdiff_t first, std::ptrdiff_t last) const {
 }
 }  // namespace functors
 
-
 #define REG_ELEMENTWISE_TYPED_KERNEL(OP_TYPE, VERSION, TYPE, KERNEL_CLASS)         \
   ONNX_CPU_OPERATOR_TYPED_KERNEL(                                                  \
       OP_TYPE,                                                                     \
@@ -218,12 +217,30 @@ ONNX_CPU_OPERATOR_KERNEL(
 
 template <typename T>
 Status Add<T>::Compute(OpKernelContext* context) const {
+  const auto looper = [](BroadcastHelper& helper) {
+    BroadcastLooper(
+        helper,
+        [&helper]() {
+          helper.NextOutputEigen<T>() = helper.NextScalarInput0<T>() + helper.NextEigenInput1<T>().array();
+        },
+        [&helper]() {
+          helper.NextOutputEigen<T>() = helper.NextEigenInput0<T>().array() + helper.NextScalarInput1<T>();
+        },
+        [&helper]() {
+          helper.NextOutputEigen<T>() = helper.NextEigenInput0<T>() + helper.NextEigenInput1<T>();
+        });
+  };
+
+  auto status = GenericBroadcastTwo(*context, looper);
+  return status;
+  /*
   return BroadcastTwo<T, T>(
       *context,
       [](EigenVectorMap<T> output, T input0, ConstEigenVectorMap<T> input1) { output = input0 + input1.array(); },
       [](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, T input1) { output = input0.array() + input1; },
       [](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, ConstEigenVectorMap<T> input1) { output = input0 + input1; },
       1.0f);
+      */
 }
 
 template <typename T>
@@ -255,7 +272,6 @@ Status Div<T>::Compute(OpKernelContext* context) const {
       [](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, ConstEigenVectorMap<T> input1) { output = input0.cwiseQuotient(input1); },
       1.0f);
 }
-
 
 namespace pow_internal {
 

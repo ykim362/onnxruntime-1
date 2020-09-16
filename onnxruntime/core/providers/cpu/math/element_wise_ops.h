@@ -11,7 +11,7 @@
 namespace onnxruntime {
 namespace functors {
 
-template<typename T>
+template <typename T>
 struct Log final : public ElementWiseRangedTransform<T> {
   Status Init(const onnxruntime::NodeAttributes) {
     return Status::OK();
@@ -22,13 +22,13 @@ struct Log final : public ElementWiseRangedTransform<T> {
     using T2 = typename std::remove_const<T1>::type;
     return new T2(*this);
   }
-  
+
   float Cost() const final { return 15.0f; }
 
   void operator()(std::ptrdiff_t first, std::ptrdiff_t last) const {
     ptrdiff_t len = last - first;
-    T* output_ptr = this->output + first; 
-        ConstEigenVectorArrayMap<T> xm(this->input + first, len);
+    T* output_ptr = this->output + first;
+    ConstEigenVectorArrayMap<T> xm(this->input + first, len);
     EigenVectorArrayMap<T> ym(output_ptr, len);
     ym = xm.log();
   }
@@ -194,7 +194,7 @@ struct Exp final : public ElementWiseRangedTransform<T> {
     ym = xm.exp();
   }
 };
-}
+}  // namespace functors
 
 DEFINE_ELE_KERNEL(Log)
 DEFINE_ELE_KERNEL(Abs)
@@ -204,7 +204,6 @@ DEFINE_ELE_KERNEL(Ceil)
 DEFINE_ELE_KERNEL(Reciprocal)
 DEFINE_ELE_KERNEL(Sqrt)
 DEFINE_ELE_KERNEL(Exp)
-
 
 template <typename T>
 class Add final : public OpKernel {
@@ -241,7 +240,6 @@ class Div final : public OpKernel {
 
   Status Compute(OpKernelContext* context) const override;
 };
-
 
 class Pow final : public OpKernel {
  public:
@@ -312,10 +310,9 @@ class Max_8 final : public OpKernel {
 
   Status Compute(OpKernelContext* context) const override;
 
-private:
-
- template<typename T>
- struct ComputeImpl;
+ private:
+  template <typename T>
+  struct ComputeImpl;
 };
 
 class Not final : public OpKernel {
@@ -452,7 +449,7 @@ struct BroadcastIterator {
           break;
         counters_[counterIndex] = 0;
       }
-    } else if (counters_[0] > counts_[0]) { // Keep original logic above so that in most case it is faster
+    } else if (counters_[0] > counts_[0]) {  // Keep original logic above so that in most case it is faster
       delta = counters_[0] / counts_[0];
       counters_[0] = counters_[0] % counts_[0];
       for (size_t counterIndex = 1; counterIndex < counters_.size(); counterIndex++) {
@@ -670,7 +667,7 @@ struct TBroadcastOutput {
       : span_size_(span_size) {
     int64_t len = tensor.Shape().Size();
     int64_t real_end = (end_offset <= 0) ? len : end_offset;
-    if (start_offset != 0 || end_offset != 0) { // Keep original semantic
+    if (start_offset != 0 || end_offset != 0) {  // Keep original semantic
       ORT_ENFORCE(start_offset >= 0 && real_end >= 0 && start_offset <= real_end && real_end <= len,
                   "Invalid start/ending offset [", start_offset, ",", real_end, ") for tensor of length:", len);
       ORT_ENFORCE(start_offset % span_size == 0 && real_end % span_size == 0,
@@ -704,6 +701,164 @@ struct TBroadcastOutput {
   const T* output_end_;
   size_t span_size_;
 };
+
+struct InputBroadcaster {
+  InputBroadcaster(const Tensor& input0, const Tensor& input1)
+      : input_tensor0_(input0),
+        input_tensor1_(input1) {
+  }
+
+  void AdvanceBy(size_t offset) {
+    ORT_ENFORCE(offset % span_size_ == 0, "InputBroadcaster can only start at span boundary!");
+    broadcaster_.iterator1_.AdvanceBy(offset);
+    broadcaster_.iterator2_.AdvanceBy(offset);
+  }
+
+  TensorShape GetOutputShape() const { return TensorShape(broadcaster_.output_shape_); }
+  size_t GetSpanSize() const { return span_size_; }
+
+  bool IsInput0Scalar() const { return broadcaster_.iterator1_.deltas_.front() == 0; }
+  bool IsInput1Scalar() const { return broadcaster_.iterator2_.deltas_.front() == 0; }
+
+  template <typename T>
+  const T& NextScalar0() { return *static_cast<const T*>(Next0()); }
+  template <typename T>
+  const T& NextScalar1() { return *static_cast<const T*>(Next1()); }
+
+  template <typename T>
+  gsl::span<const T> NextSpan0() {
+    return gsl::span<const T>(static_cast<const T*>(Next0()), span_size_);
+  }
+  template <typename T>
+  gsl::span<const T> NextSpan1() {
+    return gsl::span<const T>(static_cast<const T*>(Next1()), span_size_);
+  }
+
+  template <typename T>
+  ConstEigenVectorMap<T> NextEigen0() {
+    return ConstEigenVectorMap<T>(static_cast<const T*>(Next0()), span_size_);
+  }
+  template <typename T>
+  ConstEigenVectorMap<T> NextEigen1() {
+    return ConstEigenVectorMap<T>(static_cast<const T*>(Next1()), span_size_);
+  }
+
+ private:
+  //template <typename T>
+  //const T* Next0() { return static_cast<T*>(input0_) + broadcaster_.iterator1_.AdvanceBy(span_size_); }
+  //template <typename T>
+  //const T* Next1() { return static_cast<T*>(input1_) + broadcaster_.iterator2_.AdvanceBy(span_size_); }
+
+  const void* Next0() { return input0_bytes_ + (broadcaster_.iterator1_.AdvanceBy(span_size_) * input0_element_size_); }
+  const void* Next1() { return input1_bytes_ + (broadcaster_.iterator2_.AdvanceBy(span_size_) * input1_element_size_); }
+
+  const Tensor& input_tensor0_;
+  const Tensor& input_tensor1_;
+  const size_t input0_element_size_{input_tensor0_.DataType()->Size()};
+  const size_t input1_element_size_{input_tensor1_.DataType()->Size()};
+  const uint8_t* input0_bytes_{static_cast<const uint8_t*>(input_tensor0_.DataRaw())};
+  const uint8_t* input1_bytes_{static_cast<const uint8_t*>(input_tensor1_.DataRaw())};
+
+  Broadcaster broadcaster_{input_tensor0_.Shape().GetDims(), input_tensor1_.Shape().GetDims()};
+  size_t span_size_{broadcaster_.GetSpanSize()};
+};
+
+struct OutputBroadcaster {
+  OutputBroadcaster(size_t span_size, Tensor& tensor, int64_t start_offset = 0, int64_t end_offset = 0)
+      : span_size_(span_size) {
+    int64_t len = tensor.Shape().Size();
+    int64_t real_end = (end_offset <= 0) ? len : end_offset;
+    if (start_offset != 0 || end_offset != 0) {  // Keep original semantic
+      ORT_ENFORCE(start_offset >= 0 && real_end >= 0 && start_offset <= real_end && real_end <= len,
+                  "Invalid start/ending offset [", start_offset, ",", real_end, ") for tensor of length:", len);
+      ORT_ENFORCE(start_offset % span_size == 0 && real_end % span_size == 0,
+                  "Broadcast Output range [", start_offset, ", ", real_end,
+                  ") are not at boundary of span with size:", span_size);
+    }
+    element_size_ = tensor.DataType()->Size();
+    output_bytes_ = static_cast<uint8_t*>(tensor.MutableDataRaw()) + (start_offset * element_size_);
+    output_end_ = output_bytes_ + ((real_end - start_offset) * element_size_);
+  }
+
+  operator bool() const {
+    return output_bytes_ != output_end_;
+  }
+
+  template <typename T>
+  EigenVectorMap<T> NextEigenOutput() {
+    return EigenVectorMap<T>(static_cast<T*>(NextOutput()), span_size_);
+  }
+
+  template <typename T>
+  gsl::span<T> NextSpanOutput() {
+    return gsl::span<T>(static_cast<T*>(NextOutput()), span_size_);
+  }
+
+ private:
+  void* NextOutput() {
+    void* cur_output = output_bytes_;
+    output_bytes_ = output_bytes_ + (span_size_ * element_size_);
+    return cur_output;
+  }
+
+  uint8_t* output_bytes_;
+  size_t element_size_;
+  const void* output_end_;
+  size_t span_size_;
+};
+
+struct BroadcastHelper {
+  BroadcastHelper(InputBroadcaster& input_bc, OutputBroadcaster& output_bc)
+      : input_broadcaster(input_bc),
+        output_broadcaster(output_bc) {
+  }
+
+  bool IsInput0Scalar() const { return input_broadcaster.IsInput0Scalar(); }
+  bool IsInput1Scalar() const { return input_broadcaster.IsInput1Scalar(); }
+
+  template <typename T>
+  const T& NextScalarInput0() { return input_broadcaster.NextScalar0<T>(); }
+
+  template <typename T>
+  const T& NextScalarInput1() { return input_broadcaster.NextScalar1<T>(); }
+
+  template <typename T>
+  ConstEigenVectorMap<T> NextEigenInput0() { return input_broadcaster.NextEigen0<T>(); }
+
+  template <typename T>
+  ConstEigenVectorMap<T> NextEigenInput1() { return input_broadcaster.NextEigen1<T>(); }
+
+  template <typename T>
+  EigenVectorMap<T> NextOutputEigen() { return output_broadcaster.NextEigenOutput<T>(); }
+
+  bool NeedMoreOutput() const { return output_broadcaster; }
+
+ private:
+  InputBroadcaster& input_broadcaster;
+  OutputBroadcaster& output_broadcaster;
+};
+
+// use templatized types for the functions to avoid std::function overhead. there's one combination of types per
+// operator so it doesn't matter if there is one or three types here
+template <typename Input0ScalarFunc, typename Input1ScalarFunc, typename GeneralFunc>
+void BroadcastLooper(BroadcastHelper& helper,
+                     const Input0ScalarFunc& input0scalar,
+                     const Input1ScalarFunc& input1scalar,
+                     const GeneralFunc& general) {
+  if (helper.IsInput0Scalar()) {
+    while (helper.NeedMoreOutput()) {
+      input0scalar();
+    }
+  } else if (helper.IsInput1Scalar()) {
+    while (helper.NeedMoreOutput()) {
+      input1scalar();
+    }
+  } else {
+    while (helper.NeedMoreOutput()) {
+      general();
+    }
+  }
+}
 
 template <typename T>
 struct TensorAllocator {
@@ -762,45 +917,45 @@ void BroadcastLoopSpan(TBroadcaster& bc, Output& output, Input0Scalar input0scal
 }
 
 template <typename TInput, typename TOutput, typename Input0Scalar, typename Input1Scalar, typename General>
-void BroadcastOneSpan(concurrency::ThreadPool* tp, double unit_cost, TOutput* output_ptr, int64_t output_size, 
-                    const TInput* input0_ptr, int64_t input0_size, const TInput* input1_ptr, int64_t input1_size,
-                             Input0Scalar input0scalar, Input1Scalar input1scalar, General general) {
+void BroadcastOneSpan(concurrency::ThreadPool* tp, double unit_cost, TOutput* output_ptr, int64_t output_size,
+                      const TInput* input0_ptr, int64_t input0_size, const TInput* input1_ptr, int64_t input1_size,
+                      Input0Scalar input0scalar, Input1Scalar input1scalar, General general) {
   if (input0_size == 1) {
     ORT_ENFORCE(input1_size == output_size);
-    concurrency::ThreadPool::TryParallelFor(tp, output_size, 
-                                {static_cast<float>(sizeof(TInput)), static_cast<float>(sizeof(TOutput)), unit_cost},
-                               [=](std::ptrdiff_t first, std::ptrdiff_t last) {
-                                 size_t count = static_cast<size_t>(last - first);
-                                 EigenVectorMap<TOutput> output_map(output_ptr + first, count);
-                                 ConstEigenVectorMap<TInput> input1_map(input1_ptr + first, count); 
-                                 input0scalar(output_map, *input0_ptr, input1_map);
-                               });
+    concurrency::ThreadPool::TryParallelFor(tp, output_size,
+                                            {static_cast<float>(sizeof(TInput)), static_cast<float>(sizeof(TOutput)), unit_cost},
+                                            [=](std::ptrdiff_t first, std::ptrdiff_t last) {
+                                              size_t count = static_cast<size_t>(last - first);
+                                              EigenVectorMap<TOutput> output_map(output_ptr + first, count);
+                                              ConstEigenVectorMap<TInput> input1_map(input1_ptr + first, count);
+                                              input0scalar(output_map, *input0_ptr, input1_map);
+                                            });
   } else if (input1_size == 1) {
     ORT_ENFORCE(input0_size == output_size);
     concurrency::ThreadPool::TryParallelFor(tp, output_size,
-                                {static_cast<float>(sizeof(TInput)), static_cast<float>(sizeof(TOutput)), unit_cost},
-                               [=](std::ptrdiff_t first, std::ptrdiff_t last) {
-                                 size_t count = static_cast<size_t>(last - first);
-                                 EigenVectorMap<TOutput> output_map(output_ptr + first, count);
-                                 ConstEigenVectorMap<TInput> input0_map(input0_ptr + first, count);
-                                 input1scalar(output_map, input0_map, *input1_ptr);
-                               });
+                                            {static_cast<float>(sizeof(TInput)), static_cast<float>(sizeof(TOutput)), unit_cost},
+                                            [=](std::ptrdiff_t first, std::ptrdiff_t last) {
+                                              size_t count = static_cast<size_t>(last - first);
+                                              EigenVectorMap<TOutput> output_map(output_ptr + first, count);
+                                              ConstEigenVectorMap<TInput> input0_map(input0_ptr + first, count);
+                                              input1scalar(output_map, input0_map, *input1_ptr);
+                                            });
   } else {
     concurrency::ThreadPool::TryParallelFor(tp, output_size,
-                                {static_cast<float>(sizeof(TInput)), static_cast<float>(sizeof(TOutput)), unit_cost},
-                               [=](std::ptrdiff_t first, std::ptrdiff_t last) {
-                                 size_t count = static_cast<size_t>(last - first);
-                                 EigenVectorMap<TOutput> output_map(output_ptr + first, count);
-                                 ConstEigenVectorMap<TInput> input0_map(input0_ptr + first, count);
-                                 ConstEigenVectorMap<TInput> input1_map(input1_ptr + first, count); 
-                                 general(output_map, input0_map, input1_map);
-                               });
+                                            {static_cast<float>(sizeof(TInput)), static_cast<float>(sizeof(TOutput)), unit_cost},
+                                            [=](std::ptrdiff_t first, std::ptrdiff_t last) {
+                                              size_t count = static_cast<size_t>(last - first);
+                                              EigenVectorMap<TOutput> output_map(output_ptr + first, count);
+                                              ConstEigenVectorMap<TInput> input0_map(input0_ptr + first, count);
+                                              ConstEigenVectorMap<TInput> input1_map(input1_ptr + first, count);
+                                              general(output_map, input0_map, input1_map);
+                                            });
   }
 }
 
 template <typename TInput, typename TOutput, typename Input0Scalar, typename Input1Scalar, typename General>
-Status BroadcastTwo(OpKernelContext& context, Input0Scalar input0scalar, Input1Scalar input1scalar, General general, double unit_cost=-1.0f) {
-  if (unit_cost == -1.0f) { // no paralellization 
+Status BroadcastTwo(OpKernelContext& context, Input0Scalar input0scalar, Input1Scalar input1scalar, General general, double unit_cost = -1.0f) {
+  if (unit_cost == -1.0f) {  // no paralellization
     TBroadcaster<TInput, TInput> bc(*context.Input<Tensor>(0), *context.Input<Tensor>(1));
     TBroadcastOutput<TOutput> output(bc.GetSpanSize(), *context.Output(0, bc.GetOutputShape()));
     BroadcastLoop(bc, output, input0scalar, input1scalar, general);
@@ -875,6 +1030,18 @@ Status BroadcastVariadic(const Node& node, OpKernelContext& context, Input0Scala
 
     tempInput = std::move(tempOutput);
   }
+  return Status::OK();
+}
+
+// Broadcasting with no parallelization
+template <typename LoopFunc>
+Status GenericBroadcastTwo(OpKernelContext& context, const LoopFunc& func) {
+  InputBroadcaster input_broadcaster(*context.Input<Tensor>(0), *context.Input<Tensor>(1));
+  OutputBroadcaster output_broadcaster(input_broadcaster.GetSpanSize(),
+                                       *context.Output(0, input_broadcaster.GetOutputShape()));
+  BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster);
+  func(broadcast_helper);
+
   return Status::OK();
 }
 
