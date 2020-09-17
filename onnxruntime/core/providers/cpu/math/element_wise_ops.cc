@@ -254,7 +254,7 @@ Status Sub<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
   return status;
 }
 
@@ -275,7 +275,7 @@ Status Mul<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
   return status;
 }
 
@@ -296,7 +296,7 @@ Status Div<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
   return status;
 }
 
@@ -551,7 +551,7 @@ Status And::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
   return status;
 }
 
@@ -583,7 +583,7 @@ Status Or::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
   return status;
 }
 
@@ -616,7 +616,7 @@ Status Xor::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
   return status;
 }
 
@@ -638,7 +638,7 @@ Status Equal<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
   return status;
 }
 
@@ -659,7 +659,7 @@ Status Less<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
   return status;
 }
 
@@ -681,7 +681,7 @@ Status Greater<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
   return status;
 }
 
@@ -746,8 +746,7 @@ BitShift<T>::BitShift(const OpKernelInfo& info) : OpKernel(info) {
 
 template <typename T>
 Status BitShift<T>::Compute(OpKernelContext* context) const {
-  const auto callback = [this](BroadcastHelper& helper) {
-    helper.SetUserData(reinterpret_cast<void*>(shift_left_));  // set void* to value of bool (doesn't need to be address of)
+  const auto callback = [](BroadcastHelper& helper) {
     BroadcastLooper(
         helper,
         BroadcastFunctors{
@@ -807,7 +806,12 @@ Status BitShift<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  // set void* to value of bool (doesn't need to be address of) so it can be passed through to the lambdas via
+  // BroadcastHelper::GetUserData. This is required as we use raw function pointers for the functors to reduce
+  // the binary size.
+  void* user_data = reinterpret_cast<void*>(shift_left_);
+
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0, user_data);
   return status;
 }
 
@@ -1100,7 +1104,7 @@ Status PRelu<float>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
   return status;
 }
 
@@ -1463,19 +1467,19 @@ void BroadcastLooper(BroadcastHelper& helper, const BroadcastFunctors& functors)
   }
 }
 
-Status UntypedBroadcastTwo(OpKernelContext& context, const std::function<void(BroadcastHelper&)>& op_callback) {
+Status UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), void* user_data) {
   InputBroadcaster input_broadcaster(*context.Input<Tensor>(0), *context.Input<Tensor>(1));
   OutputBroadcaster output_broadcaster(input_broadcaster.GetSpanSize(),
                                        *context.Output(0, input_broadcaster.GetOutputShape()));
-  BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster);
+  BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster, user_data);
 
   op_callback(broadcast_helper);
 
   return Status::OK();
 }
 
-Status UntypedBroadcastTwo(OpKernelContext& context, const std::function<void(BroadcastHelper&)>& op_callback,
-                           double unit_cost) {
+Status UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), double unit_cost,
+                           void* user_data) {
   const Tensor& input0_tensor = *context.Input<Tensor>(0);
   const Tensor& input1_tensor = *context.Input<Tensor>(1);
   InputBroadcaster input_broadcaster(input0_tensor, input1_tensor);
@@ -1498,7 +1502,7 @@ Status UntypedBroadcastTwo(OpKernelContext& context, const std::function<void(Br
 
   if (span_size == output_size) {  // Only one big span for all data, parallelize inside the span
     OutputBroadcaster output_broadcaster(span_size, output_tensor);
-    BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster, tp);
+    BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster, user_data, tp, unit_cost);
     op_callback(broadcast_helper);
   } else {
     // enforce const on input broadcaster we copy from
@@ -1509,8 +1513,8 @@ Status UntypedBroadcastTwo(OpKernelContext& context, const std::function<void(Br
         TensorOpCost{static_cast<float>(input_broadcaster.Input0ElementSize()) * span_size,
                      static_cast<float>(output_tensor.DataType()->Size()) * span_size,
                      unit_cost * span_size},
-        [span_size, &const_input_broadcaster, &output_tensor, &op_callback](std::ptrdiff_t first_span,
-                                                                            std::ptrdiff_t last_span) {
+        [span_size, &const_input_broadcaster, &output_tensor, &op_callback, user_data](std::ptrdiff_t first_span,
+                                                                                       std::ptrdiff_t last_span) {
           // copy from original and advance
           InputBroadcaster segment_input_broadcaster(const_input_broadcaster);
           segment_input_broadcaster.AdvanceBy(first_span * span_size);
@@ -1519,7 +1523,7 @@ Status UntypedBroadcastTwo(OpKernelContext& context, const std::function<void(Br
           OutputBroadcaster segment_output_broadcaster(span_size, output_tensor,
                                                        first_span * span_size, last_span * span_size);
 
-          BroadcastHelper segment_helper(segment_input_broadcaster, segment_output_broadcaster);
+          BroadcastHelper segment_helper(segment_input_broadcaster, segment_output_broadcaster, user_data);
           op_callback(segment_helper);
         });
   }

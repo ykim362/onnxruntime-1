@@ -829,32 +829,20 @@ struct OutputBroadcaster {
 
 class BroadcastHelper {
  public:
-  // ctor when not parallelizing
+  // general purpose ctor
   BroadcastHelper(InputBroadcaster& input_broadcaster,
                   OutputBroadcaster& output_broadcaster,
+                  void* user_data = nullptr,
                   concurrency::ThreadPool* tp = nullptr,
                   double unit_cost = 0.0)
       : input_broadcaster_(input_broadcaster),
         output_broadcaster_(output_broadcaster),
         threadpool_(tp),
-        unit_cost_(unit_cost) {
-  }
-
-  // ctor when we parallelize multiple spans.
-  // InputBroadcaster should be at the start of the input as it will be advanced by input_offset
-  BroadcastHelper(InputBroadcaster& input_broadcaster,
-                  OutputBroadcaster& output_broadcaster,
-                  size_t input_offset,
-                  size_t output_offset, size_t output_num_elements)
-      : input_broadcaster_(input_broadcaster),
-        output_broadcaster_(output_broadcaster),
-        output_offset_(output_offset),
-        output_num_elements_(output_num_elements) {
-    input_broadcaster_.AdvanceBy(input_offset);
+        unit_cost_(unit_cost),
+        user_data_(user_data) {
   }
 
   // ctor for use when we parallelize within a span.
-  // we need to copy user_data_ in this case as the user will have had a chance to set it
   BroadcastHelper(const BroadcastHelper& rhs,
                   size_t input0_offset, size_t input0_num_elements,
                   size_t input1_offset, size_t input1_num_elements,
@@ -957,18 +945,22 @@ void BroadcastLooper(BroadcastHelper& helper, const BroadcastFunctors& functors)
 // The operator implementation plugs in the specific types in the implementation of the functors only.
 // All other code is untyped so only one version of it is required (vs. using templates for types and/or lambdas
 // which resulting in duplicating the common code for each unique combination of template types used).
+// Optional user_data will be provided to the callback via BroadcastHelper.GetUserData().
+// This is to avoid the cost of std::function.
 //
-// TODO: See if we want to use a raw pointer here as well. This is only called once during the operator Compute
-// so a little cost of std::function isn't too bad. Makes it simpler for the operator to plug user data into
-// BroadcastHelper. Alternatively we could take a void* here for user_data and plug it in when creating the
-// BroadcastHelper if there are savings from using a raw pointer.
-Status UntypedBroadcastTwo(OpKernelContext& context, const std::function<void(BroadcastHelper&)>& op_callback);
+// Using a lambda for the op_callback via `const std::function<void(BroadcastHelper&)>&` cost approx 450 bytes all up
+// (RTTI was 300 bytes of that). Whilst that lets the lambda do a capture, the cost is significant vs. passing through
+// the user_data via BroadcastHelper (which is required to use function pointers for the lower level
+// BroadcastFunctors anyway)
+Status UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), void* user_data = nullptr);
 
 // Variant of UntypedBroadcastTwo that will parallelize.
 // Operator usage is the same as the parallelization is opaque to it.
 // unit_cost must be a valid cost.
-Status UntypedBroadcastTwo(OpKernelContext& context, const std::function<void(BroadcastHelper&)>& op_callback,
-                           double unit_cost);
+// Optional user_data will be provided to the callback via BroadcastHelper.GetUserData().
+// This is to avoid the cost of std::function.
+Status UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), double unit_cost,
+                           void* user_data = nullptr);
 
 template <typename T>
 struct TensorAllocator {
@@ -1025,84 +1017,6 @@ void BroadcastLoopSpan(TBroadcaster& bc, Output& output, Input0Scalar input0scal
       general(output.NextSpanOutput(), bc.NextSpan0(), bc.NextSpan1());
   }
 }
-
-/*
-template <typename TInput, typename TOutput, typename Input0Scalar, typename Input1Scalar, typename General>
-void BroadcastOneSpan(concurrency::ThreadPool* tp, double unit_cost, TOutput* output_ptr, int64_t output_size,
-                      const TInput* input0_ptr, int64_t input0_size, const TInput* input1_ptr, int64_t input1_size,
-                      Input0Scalar input0scalar, Input1Scalar input1scalar, General general) {
-  if (input0_size == 1) {
-    ORT_ENFORCE(input1_size == output_size);
-    concurrency::ThreadPool::TryParallelFor(tp, output_size,
-                                            {static_cast<float>(sizeof(TInput)), static_cast<float>(sizeof(TOutput)), unit_cost},
-                                            [=](std::ptrdiff_t first, std::ptrdiff_t last) {
-                                              size_t count = static_cast<size_t>(last - first);
-                                              EigenVectorMap<TOutput> output_map(output_ptr + first, count);
-                                              ConstEigenVectorMap<TInput> input1_map(input1_ptr + first, count);
-                                              input0scalar(output_map, *input0_ptr, input1_map);
-                                            });
-  } else if (input1_size == 1) {
-    ORT_ENFORCE(input0_size == output_size);
-    concurrency::ThreadPool::TryParallelFor(tp, output_size,
-                                            {static_cast<float>(sizeof(TInput)), static_cast<float>(sizeof(TOutput)), unit_cost},
-                                            [=](std::ptrdiff_t first, std::ptrdiff_t last) {
-                                              size_t count = static_cast<size_t>(last - first);
-                                              EigenVectorMap<TOutput> output_map(output_ptr + first, count);
-                                              ConstEigenVectorMap<TInput> input0_map(input0_ptr + first, count);
-                                              input1scalar(output_map, input0_map, *input1_ptr);
-                                            });
-  } else {
-    concurrency::ThreadPool::TryParallelFor(tp, output_size,
-                                            {static_cast<float>(sizeof(TInput)), static_cast<float>(sizeof(TOutput)), unit_cost},
-                                            [=](std::ptrdiff_t first, std::ptrdiff_t last) {
-                                              size_t count = static_cast<size_t>(last - first);
-                                              EigenVectorMap<TOutput> output_map(output_ptr + first, count);
-                                              ConstEigenVectorMap<TInput> input0_map(input0_ptr + first, count);
-                                              ConstEigenVectorMap<TInput> input1_map(input1_ptr + first, count);
-                                              general(output_map, input0_map, input1_map);
-                                            });
-  }
-}
-
-template <typename TInput, typename TOutput, typename Input0Scalar, typename Input1Scalar, typename General>
-Status BroadcastTwo(OpKernelContext& context, Input0Scalar input0scalar, Input1Scalar input1scalar, General general, double unit_cost = -1.0f) {
-  if (unit_cost == -1.0f) {  // no paralellization
-    TBroadcaster<TInput, TInput> bc(*context.Input<Tensor>(0), *context.Input<Tensor>(1));
-    TBroadcastOutput<TOutput> output(bc.GetSpanSize(), *context.Output(0, bc.GetOutputShape()));
-    BroadcastLoop(bc, output, input0scalar, input1scalar, general);
-  } else {
-    const Tensor* input0_tensor = context.Input<Tensor>(0);
-    const Tensor* input1_tensor = context.Input<Tensor>(1);
-    TBroadcaster<TInput, TInput> bc(*input0_tensor, *input1_tensor);
-    Tensor& output_tensor = *context.Output(0, bc.GetOutputShape());
-    auto span_size = bc.GetSpanSize();
-    int64_t output_size = output_tensor.Shape().Size();
-    if (output_size != 0) {
-      concurrency::ThreadPool* tp = context.GetOperatorThreadPool();
-      if (span_size != 0) {
-        if (output_size == static_cast<int64_t>(span_size)) {  // Only one big span for all data, parallel inside it
-          ORT_ENFORCE((output_size % span_size) == 0);
-          BroadcastOneSpan(tp, unit_cost, output_tensor.MutableData<TOutput>(), output_size,
-                           input0_tensor->Data<TInput>(), input0_tensor->Shape().Size(),
-                           input1_tensor->Data<TInput>(), input1_tensor->Shape().Size(),
-                           input0scalar, input1scalar, general);
-        } else {
-          concurrency::ThreadPool::TryParallelFor(
-              tp, output_size / span_size,
-              {static_cast<float>(sizeof(TInput)) * span_size, static_cast<float>(sizeof(TOutput)) * span_size, unit_cost * span_size},
-              [=, &bc, &output_tensor](std::ptrdiff_t first_span, std::ptrdiff_t last_span) {
-                TBroadcaster<TInput, TInput> span_bc(bc);
-                TBroadcastOutput<TOutput> span_output(span_size, output_tensor, first_span * span_size, last_span * span_size);
-                span_bc.AdvanceBy(first_span * span_size);
-                BroadcastLoop(span_bc, span_output, input0scalar, input1scalar, general);
-              });
-        }
-      }
-    }
-  }
-  return Status::OK();
-}
-*/
 
 template <typename TInput, typename TOutput, typename Input0Scalar, typename Input1Scalar, typename General>
 Status BroadcastVariadic(const Node& node, OpKernelContext& context, Input0Scalar input0scalar, Input1Scalar input1scalar, General general) {
