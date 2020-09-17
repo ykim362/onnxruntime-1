@@ -42,7 +42,7 @@ WHERE_TYPED_KERNEL_WITH_TYPE_NAME(std::string, string)
 
 namespace {
 
-template<typename T, typename R>
+template <typename T, typename R>
 using EnableIfEigenScalar = typename std::enable_if<std::is_arithmetic<T>::value, R>::type;
 
 template <typename T, typename R>
@@ -101,10 +101,10 @@ SelectBroadcastLoop(bool target, TBroadcaster<bool, T>* select_broadcaster,
 
 template <typename T>
 std::unique_ptr<Tensor> Select(bool target, const Tensor& condition_tensor, const Tensor& value_tensor,
-                               TensorAllocator<T>& tensor_allocator) {
+                               TensorAllocator& tensor_allocator) {
   TBroadcaster<bool, T> select_broadcaster{condition_tensor, value_tensor};
   std::unique_ptr<Tensor> select_tensor{
-      tensor_allocator.Allocate(select_broadcaster.GetOutputShape())};
+      tensor_allocator.Allocate<T>(select_broadcaster.GetOutputShape())};
   TBroadcastOutput<T> select_broadcast_output{
       select_broadcaster.GetSpanSize(), *select_tensor};
 
@@ -180,7 +180,7 @@ Status Where<T>::Compute(OpKernelContext* context) const {
   //   Y_selection = !condition ? Y : default value
   // Finally, we broadcast over and merge X_selection and Y_selection:
   //   output = (X_selection != default value) ? X_selection : Y_selection
-  TensorAllocator<T> tensor_allocator{*context};
+  TensorAllocator tensor_allocator{*context};
   auto X_selection_tensor = Select<T>(true, *condition, *X, tensor_allocator);
   auto Y_selection_tensor = Select<T>(false, *condition, *Y, tensor_allocator);
 

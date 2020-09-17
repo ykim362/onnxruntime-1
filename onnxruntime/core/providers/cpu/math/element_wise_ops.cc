@@ -3,6 +3,7 @@
 
 #include "core/framework/data_types_internal.h"
 #include "core/providers/cpu/math/element_wise_ops.h"
+#include "core/providers/cpu/tensor/utils.h"
 #include <unsupported/Eigen/SpecialFunctions>
 #include "core/util/math.h"
 #include "core/mlas/inc/mlas.h"
@@ -214,6 +215,11 @@ ONNX_CPU_OPERATOR_KERNEL(
         .TypeConstraint("T", DataTypeImpl::GetTensorType<bool>())
         .TypeConstraint("T1", DataTypeImpl::GetTensorType<bool>()),
     Xor);
+
+static void UntypedBroadcastVariadic(
+    int input_count, OpKernelContext& context,
+    std::unique_ptr<Tensor> (*allocate_tensor)(const TensorAllocator& tensor_allocator, const TensorShape& shape),
+    void (*op_callback)(BroadcastHelper&));
 
 template <typename T>
 Status Add<T>::Compute(OpKernelContext* context) const {
@@ -438,11 +444,32 @@ Status Sum_6<float>::Compute(OpKernelContext* ctx) const {
 
 template <>
 Status Sum_8<float>::Compute(OpKernelContext* context) const {
-  return BroadcastVariadic<float, float>(
-      Node(), *context,
-      [](EigenVectorMap<float> output, float input0, ConstEigenVectorMap<float> input1) { output = input0 + input1.array(); },
-      [](EigenVectorMap<float> output, ConstEigenVectorMap<float> input0, float input1) { output = input0.array() + input1; },
-      [](EigenVectorMap<float> output, ConstEigenVectorMap<float> input0, ConstEigenVectorMap<float> input1) { output = input0 + input1; });
+  const auto allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
+    return tensor_allocator.Allocate<float>(shape);
+  };
+
+  const auto callback = [](BroadcastHelper& helper) {
+    BroadcastLooper(
+        helper,
+        BroadcastFunctors{
+            [](BroadcastHelper& per_iter_bh) {
+              per_iter_bh.OutputEigen<float>() =
+                  per_iter_bh.ScalarInput0<float>() + per_iter_bh.EigenInput1<float>().array();
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              per_iter_bh.OutputEigen<float>() =
+                  per_iter_bh.EigenInput0<float>().array() + per_iter_bh.ScalarInput1<float>();
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              per_iter_bh.OutputEigen<float>() =
+                  per_iter_bh.EigenInput0<float>() + per_iter_bh.EigenInput1<float>();
+            }});
+  };
+
+  int input_count = Node().InputArgCount().front();
+  UntypedBroadcastVariadic(input_count, *context, allocator, callback);
+
+  return Status::OK();
 }
 
 template <>
@@ -465,19 +492,40 @@ Status Min_6<float>::Compute(OpKernelContext* ctx) const {
 
 template <typename T>
 struct Min_8::ComputeImpl {
-  Status operator()(const Min_8* inst, OpKernelContext* context) const {
-    return BroadcastVariadic<T, T>(
-        inst->Node(), *context,
-        [](EigenVectorMap<T> output, T input0, ConstEigenVectorMap<T> input1) { output = input1.array().min(input0); },
-        [](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, T input1) { output = input0.array().min(input1); },
-        [](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, ConstEigenVectorMap<T> input1) { output = input0.array().min(input1.array()); });
+  Status operator()(const Min_8& inst, OpKernelContext* context) const {
+    const auto allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
+      return tensor_allocator.Allocate<T>(shape);
+    };
+
+    const auto callback = [](BroadcastHelper& helper) {
+      BroadcastLooper(
+          helper,
+          BroadcastFunctors{
+              [](BroadcastHelper& per_iter_bh) {
+                per_iter_bh.OutputEigen<T>() =
+                    per_iter_bh.EigenInput1<T>().array().min(per_iter_bh.ScalarInput0<T>());
+              },
+              [](BroadcastHelper& per_iter_bh) {
+                per_iter_bh.OutputEigen<T>() =
+                    per_iter_bh.EigenInput0<T>().array().min(per_iter_bh.ScalarInput1<T>());
+              },
+              [](BroadcastHelper& per_iter_bh) {
+                per_iter_bh.OutputEigen<T>() =
+                    per_iter_bh.EigenInput0<T>().array().min(per_iter_bh.EigenInput1<T>().array());
+              }});
+    };
+
+    int input_count = inst.Node().InputArgCount().front();
+    UntypedBroadcastVariadic(input_count, *context, allocator, callback);
+
+    return Status::OK();
   }
 };
 
 Status Min_8::Compute(OpKernelContext* context) const {
   utils::MLTypeCallDispatcherRet<Status, ComputeImpl, float, double, MLFloat16, int32_t, uint32_t, int64_t, uint64_t>
       t_disp(context->Input<Tensor>(0)->GetElementType());
-  return t_disp.Invoke(this, context);
+  return t_disp.Invoke(*this, context);
 }
 
 template <>
@@ -500,19 +548,40 @@ Status Max_6<float>::Compute(OpKernelContext* ctx) const {
 
 template <typename T>
 struct Max_8::ComputeImpl {
-  Status operator()(const Max_8* inst, OpKernelContext* context) const {
-    return BroadcastVariadic<T, T>(
-        inst->Node(), *context,
-        [](EigenVectorMap<T> output, T input0, ConstEigenVectorMap<T> input1) { output = input1.array().max(input0); },
-        [](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, T input1) { output = input0.array().max(input1); },
-        [](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, ConstEigenVectorMap<T> input1) { output = input0.array().max(input1.array()); });
+  Status operator()(const Max_8& inst, OpKernelContext* context) const {
+    const auto allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
+      return tensor_allocator.Allocate<T>(shape);
+    };
+
+    const auto callback = [](BroadcastHelper& helper) {
+      BroadcastLooper(
+          helper,
+          BroadcastFunctors{
+              [](BroadcastHelper& per_iter_bh) {
+                per_iter_bh.OutputEigen<T>() =
+                    per_iter_bh.EigenInput1<T>().array().max(per_iter_bh.ScalarInput0<T>());
+              },
+              [](BroadcastHelper& per_iter_bh) {
+                per_iter_bh.OutputEigen<T>() =
+                    per_iter_bh.EigenInput0<T>().array().max(per_iter_bh.ScalarInput1<T>());
+              },
+              [](BroadcastHelper& per_iter_bh) {
+                per_iter_bh.OutputEigen<T>() =
+                    per_iter_bh.EigenInput0<T>().array().max(per_iter_bh.EigenInput1<T>().array());
+              }});
+    };
+
+    int input_count = inst.Node().InputArgCount().front();
+    UntypedBroadcastVariadic(input_count, *context, allocator, callback);
+
+    return Status::OK();
   }
 };
 
 Status Max_8::Compute(OpKernelContext* context) const {
   utils::MLTypeCallDispatcherRet<Status, ComputeImpl, float, double, MLFloat16, int32_t, uint32_t, int64_t, uint64_t>
       t_disp(context->Input<Tensor>(0)->GetElementType());
-  return t_disp.Invoke(this, context);
+  return t_disp.Invoke(*this, context);
 }
 
 Status Not::Compute(OpKernelContext* context) const {
@@ -716,17 +785,35 @@ Status Mean_6<float>::Compute(OpKernelContext* ctx) const {
 
 template <>
 Status Mean_8<float>::Compute(OpKernelContext* context) const {
-  // Do a sum exactly the same as in Sum_8
-  Status status = BroadcastVariadic<float, float>(
-      Node(), *context,
-      [](EigenVectorMap<float> output, float input0, ConstEigenVectorMap<float> input1) { output = input0 + input1.array(); },
-      [](EigenVectorMap<float> output, ConstEigenVectorMap<float> input0, float input1) { output = input0.array() + input1; },
-      [](EigenVectorMap<float> output, ConstEigenVectorMap<float> input0, ConstEigenVectorMap<float> input1) { output = input0 + input1; });
-  if (!status.IsOK())
-    return status;
+  const auto allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
+    return tensor_allocator.Allocate<float>(shape);
+  };
+
+  const auto callback = [](BroadcastHelper& helper) {
+    BroadcastLooper(
+        helper,
+        // Do a sum exactly the same as in Sum_8
+        BroadcastFunctors{
+            [](BroadcastHelper& per_iter_bh) {
+              per_iter_bh.OutputEigen<float>() =
+                  per_iter_bh.ScalarInput0<float>() + per_iter_bh.EigenInput1<float>().array();
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              per_iter_bh.OutputEigen<float>() =
+                  per_iter_bh.EigenInput0<float>().array() + per_iter_bh.ScalarInput1<float>();
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              per_iter_bh.OutputEigen<float>() =
+                  per_iter_bh.EigenInput0<float>() + per_iter_bh.EigenInput1<float>();
+            }});
+  };
+
+  int input_count = Node().InputArgCount().front();
+  UntypedBroadcastVariadic(input_count, *context, allocator, callback);
 
   // Now divide by the input count to get the mean
-  EigenMap<float>(*context->Output<Tensor>(0)) *= 1.0f / static_cast<float>(Node().InputArgCount().front());
+  EigenMap<float>(*context->Output<Tensor>(0)) *= 1.0f / static_cast<float>(input_count);
+
   return Status::OK();
 }
 
@@ -1539,6 +1626,50 @@ void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(Broadcast
           BroadcastHelper segment_helper(segment_input_broadcaster, segment_output_broadcaster, user_data);
           op_callback(segment_helper);
         });
+  }
+}
+
+// allocate_tensor should allocate a tensor of the output type with the given shape
+static void UntypedBroadcastVariadic(int input_count, OpKernelContext& context,
+                                     std::unique_ptr<Tensor> (*allocate_tensor)(const TensorAllocator& allocator,
+                                                                                const TensorShape& shape),
+                                     void (*op_callback)(BroadcastHelper&)) {
+  const auto& input0 = *context.Input<Tensor>(0);
+
+  // One item is trivial, just copy across and exit
+  if (input_count == 1) {
+    auto& output = *context.Output(0, input0.Shape());
+    CopyCpuTensor(&input0, &output);
+    return;
+  }
+
+  TensorAllocator tensor_allocator(context);
+  std::unique_ptr<Tensor> temp_input;
+  std::unique_ptr<Tensor> temp_output;
+
+  // For more than 2 tensors, we sum the first two into a temporary tensor, then sum the next with the temporary tensor
+  for (int i = 0; i < input_count - 1; i++) {
+    auto& tensor0 = temp_input ? *temp_input : input0;
+    auto& tensor1 = *context.Input<Tensor>(i + 1);
+
+    InputBroadcaster input_broadcaster(tensor0, tensor1);
+
+    // Create a temporary output for all but the last iteration, which goes to the real output
+    Tensor* p_output = nullptr;
+    if (i == input_count - 2) {
+      p_output = context.Output(0, input_broadcaster.GetOutputShape());
+    } else {
+      temp_output = allocate_tensor(tensor_allocator, input_broadcaster.GetOutputShape());
+      p_output = temp_output.get();
+    }
+
+    // TBroadcastOutput<TOutput> output(bc.GetSpanSize(), *p_output);
+    OutputBroadcaster output_broadcaster(input_broadcaster.GetSpanSize(), *p_output);
+    BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster);
+
+    op_callback(broadcast_helper);
+
+    temp_input = std::move(temp_output);
   }
 }
 

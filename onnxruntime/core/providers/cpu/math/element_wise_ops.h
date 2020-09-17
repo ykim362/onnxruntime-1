@@ -971,14 +971,14 @@ void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(Broadcast
 void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), double unit_cost,
                          void* user_data = nullptr);
 
-template <typename T>
 struct TensorAllocator {
   TensorAllocator(OpKernelContext& context) {
     auto status = context.GetTempSpaceAllocator(&allocator_);
     ORT_ENFORCE(status.IsOK(), status.ErrorMessage());
   }
 
-  std::unique_ptr<Tensor> Allocate(const TensorShape& shape) {
+  template <typename T>
+  std::unique_ptr<Tensor> Allocate(const TensorShape& shape) const {
     return onnxruntime::make_unique<Tensor>(DataTypeImpl::GetType<T>(),
                                             shape,
                                             allocator_);
@@ -1025,47 +1025,6 @@ void BroadcastLoopSpan(TBroadcaster& bc, Output& output, Input0Scalar input0scal
     while (output)
       general(output.NextSpanOutput(), bc.NextSpan0(), bc.NextSpan1());
   }
-}
-
-template <typename TInput, typename TOutput, typename Input0Scalar, typename Input1Scalar, typename General>
-Status BroadcastVariadic(const Node& node, OpKernelContext& context, Input0Scalar input0scalar, Input1Scalar input1scalar, General general) {
-  auto input_count = node.InputArgCount().front();
-  ORT_ENFORCE(input_count >= 1, "Must have 1 or more inputs");
-
-  // One item is trivial, just copy across and exit
-  if (input_count == 1) {
-    EigenMap<TOutput>(*context.Output(0, context.Input<Tensor>(0)->Shape())) = EigenMap<TInput>(*context.Input<Tensor>(0));
-    return Status::OK();
-  }
-
-  std::unique_ptr<Tensor> tempInput;
-  std::unique_ptr<Tensor> tempOutput;
-
-  TensorAllocator<TOutput> tensorAllocator(context);
-
-  // For more than 2 tensors, we sum the first two into a temporary tensor, then sum the next with the temporary tensor
-  for (int i = 0; i < input_count - 1; i++) {
-    auto& tensor0 = tempInput ? *tempInput : *context.Input<Tensor>(0);
-    auto& tensor1 = *context.Input<Tensor>(i + 1);
-
-    TBroadcaster<TInput, TInput> bc(tensor0, tensor1);
-
-    // Create a temporary output for all but the last iteration, which goes to the real output
-    Tensor* p_output{};
-    if (i == input_count - 2)
-      p_output = context.Output(0, bc.GetOutputShape());
-    else {
-      tempOutput = tensorAllocator.Allocate(bc.GetOutputShape());
-      p_output = tempOutput.get();
-    }
-
-    TBroadcastOutput<TOutput> output(bc.GetSpanSize(), *p_output);
-
-    BroadcastLoop(bc, output, input0scalar, input1scalar, general);
-
-    tempInput = std::move(tempOutput);
-  }
-  return Status::OK();
 }
 
 }  // namespace onnxruntime
