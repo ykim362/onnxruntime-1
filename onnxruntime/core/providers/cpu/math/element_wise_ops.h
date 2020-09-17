@@ -884,6 +884,15 @@ class BroadcastHelper {
   template <typename T>
   EigenVectorMap<T> OutputEigen() { return output_broadcaster_.EigenOutput<T>(output_offset_, output_num_elements_); }
 
+  template <typename T>
+  gsl::span<const T> SpanInput0() { return input_broadcaster_.Span0<T>(input0_offset_, input0_num_elements_); }
+
+  template <typename T>
+  gsl::span<const T> SpanInput1() { return input_broadcaster_.Span1<T>(input1_offset_, input1_num_elements_); }
+
+  template <typename T>
+  gsl::span<T> OutputSpan() { return output_broadcaster_.SpanOutput<T>(output_offset_, output_num_elements_); }
+
   void Next() {
     input_broadcaster_.Next();
     output_broadcaster_.Next();
@@ -952,15 +961,15 @@ void BroadcastLooper(BroadcastHelper& helper, const BroadcastFunctors& functors)
 // (RTTI was 300 bytes of that). Whilst that lets the lambda do a capture, the cost is significant vs. passing through
 // the user_data via BroadcastHelper (which is required to use function pointers for the lower level
 // BroadcastFunctors anyway)
-Status UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), void* user_data = nullptr);
+void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), void* user_data = nullptr);
 
 // Variant of UntypedBroadcastTwo that will parallelize.
 // Operator usage is the same as the parallelization is opaque to it.
 // unit_cost must be a valid cost.
 // Optional user_data will be provided to the callback via BroadcastHelper.GetUserData().
 // This is to avoid the cost of std::function.
-Status UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), double unit_cost,
-                           void* user_data = nullptr);
+void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), double unit_cost,
+                         void* user_data = nullptr);
 
 template <typename T>
 struct TensorAllocator {

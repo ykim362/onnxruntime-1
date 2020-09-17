@@ -233,8 +233,8 @@ Status Add<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback /*, 1.0f*/);
-  return status;
+  UntypedBroadcastTwo(*context, callback /*, 1.0f*/);
+  return Status::OK();
 }
 
 template <typename T>
@@ -254,8 +254,8 @@ Status Sub<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0);
+  return Status::OK();
 }
 
 template <typename T>
@@ -275,8 +275,8 @@ Status Mul<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0);
+  return Status::OK();
 }
 
 template <typename T>
@@ -296,8 +296,8 @@ Status Div<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0);
+  return Status::OK();
 }
 
 namespace pow_internal {
@@ -551,8 +551,8 @@ Status And::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0);
+  return Status::OK();
 }
 
 Status Or::Compute(OpKernelContext* context) const {
@@ -583,8 +583,8 @@ Status Or::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0);
+  return Status::OK();
 }
 
 Status Xor::Compute(OpKernelContext* context) const {
@@ -616,8 +616,8 @@ Status Xor::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0);
+  return Status::OK();
 }
 
 template <typename T>
@@ -638,8 +638,8 @@ Status Equal<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0);
+  return Status::OK();
 }
 
 template <typename T>
@@ -659,8 +659,8 @@ Status Less<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0);
+  return Status::OK();
 }
 
 template <typename T>
@@ -681,8 +681,8 @@ Status Greater<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0);
+  return Status::OK();
 }
 
 template <>
@@ -811,8 +811,8 @@ Status BitShift<T>::Compute(OpKernelContext* context) const {
   // the binary size.
   void* user_data = reinterpret_cast<void*>(shift_left_);
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0, user_data);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0, user_data);
+  return Status::OK();
 }
 
 template <typename T>
@@ -1104,8 +1104,8 @@ Status PRelu<float>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, callback, 1.0);
-  return status;
+  UntypedBroadcastTwo(*context, callback, 1.0);
+  return Status::OK();
 }
 
 ONNX_CPU_OPERATOR_VERSIONED_KERNEL(
@@ -1243,34 +1243,44 @@ ONNX_CPU_OPERATOR_KERNEL(
 namespace mod_internal {
 
 template <class T>
-void BroadCastFMod(const Tensor& X, const Tensor& Y, OpKernelContext* context) {
-  TBroadcaster<T, T> mod_broadcaster{X, Y};
-  Tensor* const output = context->Output(0, mod_broadcaster.GetOutputShape());
-  ORT_ENFORCE(output, "failed to get first output!");
-  TBroadcastOutput<T> mod_broadcast_output{
-      mod_broadcaster.GetSpanSize(), *output};
+void BroadCastFMod(OpKernelContext* context) {
+  const auto callback = [](BroadcastHelper& helper) {
+    BroadcastLooper(
+        helper,
+        BroadcastFunctors{
+            [](BroadcastHelper& per_iter_bh) {
+              const T& X = per_iter_bh.ScalarInput0<T>();
+              auto Y = per_iter_bh.SpanInput1<T>();
+              auto output = per_iter_bh.OutputSpan<T>();
 
-  BroadcastLoopSpan(
-      mod_broadcaster, mod_broadcast_output,
-      [](gsl::span<T> output, const T& X, gsl::span<const T> Y) {
-        std::transform(Y.cbegin(), Y.cend(), output.begin(),
-                       [X](T y) {
-                         return static_cast<T>(std::fmod(X, y));
-                       });
-      },
-      [](gsl::span<T> output, gsl::span<const T> X, const T& Y) {
-        std::transform(X.cbegin(), X.cend(), output.begin(),
-                       [Y](T x) {
-                         return static_cast<T>(std::fmod(x, Y));
-                       });
-      },
-      [](gsl::span<T> output, gsl::span<const T> X, gsl::span<const T> Y) {
-        std::transform(
-            X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
-            [](T x, T y) {
-              return static_cast<T>(std::fmod(x, y));
-            });
-      });
+              std::transform(Y.cbegin(), Y.cend(), output.begin(),
+                             [X](T y) {
+                               return static_cast<T>(std::fmod(X, y));
+                             });
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              auto X = per_iter_bh.SpanInput0<T>();
+              const T& Y = per_iter_bh.ScalarInput1<T>();
+              auto output = per_iter_bh.OutputSpan<T>();
+
+              std::transform(X.cbegin(), X.cend(), output.begin(),
+                             [Y](T x) {
+                               return static_cast<T>(std::fmod(x, Y));
+                             });
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              auto X = per_iter_bh.SpanInput0<T>();
+              auto Y = per_iter_bh.SpanInput1<T>();
+              auto output = per_iter_bh.OutputSpan<T>();
+
+              std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
+                             [](T x, T y) {
+                               return static_cast<T>(std::fmod(x, y));
+                             });
+            }});
+  };
+
+  UntypedBroadcastTwo(*context, callback);
 }
 
 template <class T>
@@ -1283,79 +1293,96 @@ inline T Modulus(T x, T y) {
 }
 
 template <class T>
-void BroadCastMod(const Tensor& X, const Tensor& Y, OpKernelContext* context) {
-  TBroadcaster<T, T> mod_broadcaster{X, Y};
-  Tensor* const output = context->Output(0, mod_broadcaster.GetOutputShape());
-  ORT_ENFORCE(output, "failed to get first output!");
-  TBroadcastOutput<T> mod_broadcast_output{
-      mod_broadcaster.GetSpanSize(), *output};
+void BroadCastMod(OpKernelContext* context) {
+  const auto callback = [](BroadcastHelper& helper) {
+    BroadcastLooper(
+        helper,
+        BroadcastFunctors{
+            [](BroadcastHelper& per_iter_bh) {
+              const T& X = per_iter_bh.ScalarInput0<T>();
+              auto Y = per_iter_bh.SpanInput1<T>();
+              auto output = per_iter_bh.OutputSpan<T>();
 
-  // static_cast below are necessary when small types such as
-  // int16_t and int8_t are converted to integers to perform remainder
-  // operation. This cast is safe with respect to data loss.
-  BroadcastLoopSpan(
-      mod_broadcaster, mod_broadcast_output,
-      [](gsl::span<T> output, const T& X, gsl::span<const T> Y) {
-        std::transform(Y.cbegin(), Y.cend(), output.begin(),
-                       [X](T y) {
-                         return Modulus(X, y);
-                       });
-      },
-      [](gsl::span<T> output, gsl::span<const T> X, const T& Y) {
-        std::transform(X.cbegin(), X.cend(), output.begin(),
-                       [Y](T x) {
-                         return Modulus(x, Y);
-                       });
-      },
-      [](gsl::span<T> output, gsl::span<const T> X, gsl::span<const T> Y) {
-        std::transform(
-            X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
-            [](T x, T y) {
-              return Modulus(x, y);
-            });
-      });
+              std::transform(Y.cbegin(), Y.cend(), output.begin(),
+                             [X](T y) {
+                               return Modulus(X, y);
+                             });
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              auto X = per_iter_bh.SpanInput0<T>();
+              const T& Y = per_iter_bh.ScalarInput1<T>();
+              auto output = per_iter_bh.OutputSpan<T>();
+
+              std::transform(X.cbegin(), X.cend(), output.begin(),
+                             [Y](T x) {
+                               return Modulus(x, Y);
+                             });
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              auto X = per_iter_bh.SpanInput0<T>();
+              auto Y = per_iter_bh.SpanInput1<T>();
+              auto output = per_iter_bh.OutputSpan<T>();
+
+              std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
+                             [](T x, T y) {
+                               return Modulus(x, y);
+                             });
+            }});
+  };
+
+  UntypedBroadcastTwo(*context, callback);
 }
 
-void BroadCastMFloat16FMod(const Tensor& X, const Tensor& Y, OpKernelContext* context) {
-  TBroadcaster<MLFloat16, MLFloat16> mod_broadcaster{X, Y};
-  Tensor* const output = context->Output(0, mod_broadcaster.GetOutputShape());
-  ORT_ENFORCE(output, "failed to get first output!");
-  TBroadcastOutput<MLFloat16> mod_broadcast_output{
-      mod_broadcaster.GetSpanSize(), *output};
+void BroadCastMFloat16FMod(OpKernelContext* context) {
+  const auto callback = [](BroadcastHelper& helper) {
+    BroadcastLooper(
+        helper,
+        BroadcastFunctors{
+            [](BroadcastHelper& per_iter_bh) {
+              const auto X = per_iter_bh.ScalarInput0<MLFloat16>();
+              auto Y = per_iter_bh.SpanInput1<MLFloat16>();
+              auto output = per_iter_bh.OutputSpan<MLFloat16>();
 
-  BroadcastLoopSpan(
-      mod_broadcaster, mod_broadcast_output,
-      [](gsl::span<MLFloat16> output, const MLFloat16& X, gsl::span<const MLFloat16> Y) {
-        std::transform(Y.cbegin(), Y.cend(), output.begin(),
-                       [X_fl = math::halfToFloat(X.val)](const MLFloat16& y) {
-                         return MLFloat16(math::floatToHalf(std::fmod(X_fl, math::halfToFloat(y.val))));
-                       });
-      },
-      [](gsl::span<MLFloat16> output, gsl::span<const MLFloat16> X, const MLFloat16& Y) {
-        std::transform(X.cbegin(), X.cend(), output.begin(),
-                       [Y_fl = math::halfToFloat(Y.val)](const MLFloat16& x) {
-                         return MLFloat16(math::floatToHalf(std::fmod(math::halfToFloat(x.val), Y_fl)));
-                       });
-      },
-      [](gsl::span<MLFloat16> output, gsl::span<const MLFloat16> X, gsl::span<const MLFloat16> Y) {
-        std::transform(
-            X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
-            [](const MLFloat16& x, const MLFloat16& y) {
-              auto x_fl = math::halfToFloat(x.val);
-              auto y_fl = math::halfToFloat(y.val);
-              return MLFloat16(math::floatToHalf(std::fmod(x_fl, y_fl)));
-            });
-      });
+              std::transform(Y.cbegin(), Y.cend(), output.begin(),
+                             [X_fl = math::halfToFloat(X.val)](const MLFloat16& y) {
+                               return MLFloat16(math::floatToHalf(std::fmod(X_fl, math::halfToFloat(y.val))));
+                             });
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              auto X = per_iter_bh.SpanInput0<MLFloat16>();
+              const MLFloat16 Y = per_iter_bh.ScalarInput1<MLFloat16>();
+              auto output = per_iter_bh.OutputSpan<MLFloat16>();
+
+              std::transform(X.cbegin(), X.cend(), output.begin(),
+                             [Y_fl = math::halfToFloat(Y.val)](const MLFloat16& x) {
+                               return MLFloat16(math::floatToHalf(std::fmod(math::halfToFloat(x.val), Y_fl)));
+                             });
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              auto X = per_iter_bh.SpanInput0<MLFloat16>();
+              auto Y = per_iter_bh.SpanInput1<MLFloat16>();
+              auto output = per_iter_bh.OutputSpan<MLFloat16>();
+
+              std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
+                             [](const MLFloat16& x, const MLFloat16& y) {
+                               auto x_fl = math::halfToFloat(x.val);
+                               auto y_fl = math::halfToFloat(y.val);
+                               return MLFloat16(math::floatToHalf(std::fmod(x_fl, y_fl)));
+                             });
+            }});
+  };
+
+  UntypedBroadcastTwo(*context, callback);
 }
 
 // Generic implementation of Mod kernel
 template <class T>
 struct CallModImpl {
-  void operator()(bool fmod, const Tensor& X, const Tensor& Y, OpKernelContext* ctx) const {
+  void operator()(bool fmod, OpKernelContext* ctx) const {
     if (fmod) {
-      BroadCastFMod<T>(X, Y, ctx);
+      BroadCastFMod<T>(ctx);
     } else {
-      BroadCastMod<T>(X, Y, ctx);
+      BroadCastMod<T>(ctx);
     }
   }
 };
@@ -1363,43 +1390,31 @@ struct CallModImpl {
 }  // namespace mod_internal
 
 Status Mod::Compute(OpKernelContext* context) const {
-  Status s;
-
   const auto& X = *context->Input<Tensor>(0);
-  const auto& Y = *context->Input<Tensor>(1);
-
-  auto dtype = X.DataType();
-  if (dtype != Y.DataType()) {
-    return ORT_MAKE_STATUS(ONNXRUNTIME, INVALID_ARGUMENT,
-                           "X and Y input types do not match: ",
-                           dtype, " vs ", Y.DataType());
-  }
-
-  using namespace mod_internal;
-
-  namespace on = ONNX_NAMESPACE;
   auto dt_type = X.GetElementType();
+
   switch (dt_type) {
-    case on::TensorProto_DataType_FLOAT:
+    case ONNX_NAMESPACE::TensorProto_DataType_FLOAT:
       ORT_ENFORCE(fmod_, "fmod attribute must be true for float, float16 and double types");
-      BroadCastFMod<float>(X, Y, context);
+      mod_internal::BroadCastFMod<float>(context);
       break;
-    case on::TensorProto_DataType_DOUBLE:
+    case ONNX_NAMESPACE::TensorProto_DataType_DOUBLE:
       ORT_ENFORCE(fmod_, "fmod attribute must be true for float, float16 and double types");
-      BroadCastFMod<double>(X, Y, context);
+      mod_internal::BroadCastFMod<double>(context);
       break;
-    case on::TensorProto_DataType_FLOAT16:
+    case ONNX_NAMESPACE::TensorProto_DataType_FLOAT16:
       ORT_ENFORCE(fmod_, "fmod attribute must be true for float, float16 and double types");
-      BroadCastMFloat16FMod(X, Y, context);
+      mod_internal::BroadCastMFloat16FMod(context);
       break;
     default:
       utils::MLTypeCallDispatcher<mod_internal::CallModImpl, uint8_t, int8_t, uint16_t, int16_t,
                                   uint32_t, int32_t, uint64_t, int64_t>
           t_disp(dt_type);
-      t_disp.Invoke(fmod_, X, Y, context);
+      t_disp.Invoke(fmod_, context);
       break;
   }
-  return s;
+
+  return Status::OK();
 }
 
 //
@@ -1467,19 +1482,17 @@ void BroadcastLooper(BroadcastHelper& helper, const BroadcastFunctors& functors)
   }
 }
 
-Status UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), void* user_data) {
+void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), void* user_data) {
   InputBroadcaster input_broadcaster(*context.Input<Tensor>(0), *context.Input<Tensor>(1));
   OutputBroadcaster output_broadcaster(input_broadcaster.GetSpanSize(),
                                        *context.Output(0, input_broadcaster.GetOutputShape()));
   BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster, user_data);
 
   op_callback(broadcast_helper);
-
-  return Status::OK();
 }
 
-Status UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), double unit_cost,
-                           void* user_data) {
+void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), double unit_cost,
+                         void* user_data) {
   const Tensor& input0_tensor = *context.Input<Tensor>(0);
   const Tensor& input1_tensor = *context.Input<Tensor>(1);
   InputBroadcaster input_broadcaster(input0_tensor, input1_tensor);
@@ -1491,7 +1504,7 @@ Status UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(Broadca
 
   // one or more zero dimensions so nothing more to do
   if (output_size == 0) {
-    return Status::OK();
+    return;
   }
 
   // TODO: There was an 'if' with no 'else' for span_size != 0, but a span of 0 should have meant
@@ -1527,8 +1540,6 @@ Status UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(Broadca
           op_callback(segment_helper);
         });
   }
-
-  return Status::OK();
 }
 
 }  // namespace onnxruntime
