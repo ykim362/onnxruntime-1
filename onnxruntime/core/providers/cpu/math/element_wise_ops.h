@@ -725,42 +725,10 @@ struct InputBroadcaster {
   size_t Input0ElementSize() const { return input0_element_size_; }
   size_t Input1ElementSize() const { return input1_element_size_; }
 
-  //template <typename T>
-  //const T& NextScalar0() { return *static_cast<const T*>(Next0()); }
-  //template <typename T>
-  //const T& NextScalar1() { return *static_cast<const T*>(Next1()); }
-
-  //template <typename T>
-  //gsl::span<const T> NextSpan0() {
-  //  return gsl::span<const T>(static_cast<const T*>(Next0()), span_size_);
-  //}
-  //template <typename T>
-  //gsl::span<const T> NextSpan1() {
-  //  return gsl::span<const T>(static_cast<const T*>(Next1()), span_size_);
-  //}
-
-  //template <typename T>
-  //ConstEigenVectorMap<T> NextEigen0() {
-  //  return ConstEigenVectorMap<T>(static_cast<const T*>(Next0()), span_size_);
-  //}
-  //template <typename T>
-  //ConstEigenVectorMap<T> NextEigen1() {
-  //  return ConstEigenVectorMap<T>(static_cast<const T*>(Next1()), span_size_);
-  //}
-
   template <typename T>
-  const T& Scalar0() { return *static_cast<const T*>(input0_bytes_); }
+  const T& Scalar0() { return *(static_cast<const T*>(input0_bytes_) + broadcaster_.iterator1_.Current()); }
   template <typename T>
-  const T& Scalar1() { return *static_cast<const T*>(input1_bytes_); }
-
-  //template <typename T>
-  //ConstEigenVectorMap<T> Eigen0() {
-  //  return Eigen0(0, span_size_);
-  //}
-  //template <typename T>
-  //ConstEigenVectorMap<T> Eigen1() {
-  //  return Eigen1(0, span_size_);
-  //}
+  const T& Scalar1() { return *(static_cast<const T*>(input1_bytes_) + broadcaster_.iterator2_.Current()); }
 
   // general usage is to get a full span, but if we parallelize within a span we need intra-span pieces
   template <typename T>
@@ -776,25 +744,27 @@ struct InputBroadcaster {
                                   num_elements);
   }
 
+  // TODO: Add span support. Convert from Next* to returning current value
+  //template <typename T>
+  //gsl::span<const T> NextSpan0() {
+  //  return gsl::span<const T>(static_cast<const T*>(Next0()), span_size_);
+  //}
+  //template <typename T>
+  //gsl::span<const T> NextSpan1() {
+  //  return gsl::span<const T>(static_cast<const T*>(Next1()), span_size_);
+  //}
+
   void Next() {
     AdvanceBy(span_size_);
   }
 
  private:
-  //template <typename T>
-  //const T* Next0() { return static_cast<T*>(input0_) + broadcaster_.iterator1_.AdvanceBy(span_size_); }
-  //template <typename T>
-  //const T* Next1() { return static_cast<T*>(input1_) + broadcaster_.iterator2_.AdvanceBy(span_size_); }
-
-  //const void* Next0() { return input0_bytes_ + (broadcaster_.iterator1_.AdvanceBy(span_size_) * input0_element_size_); }
-  //const void* Next1() { return input1_bytes_ + (broadcaster_.iterator2_.AdvanceBy(span_size_) * input1_element_size_); }
-
   const Tensor& input_tensor0_;
   const Tensor& input_tensor1_;
   const size_t input0_element_size_{input_tensor0_.DataType()->Size()};
   const size_t input1_element_size_{input_tensor1_.DataType()->Size()};
-  const void* input0_bytes_{/*static_cast<const uint8_t*>*/ (input_tensor0_.DataRaw())};
-  const void* input1_bytes_{/*static_cast<const uint8_t*>*/ (input_tensor1_.DataRaw())};
+  const void* input0_bytes_{input_tensor0_.DataRaw()};
+  const void* input1_bytes_{input_tensor1_.DataRaw()};
 
   Broadcaster broadcaster_{input_tensor0_.Shape().GetDims(), input_tensor1_.Shape().GetDims()};
   size_t span_size_{broadcaster_.GetSpanSize()};
@@ -826,21 +796,6 @@ struct OutputBroadcaster {
     return output_bytes_ != output_end_;
   }
 
-  //template <typename T>
-  //EigenVectorMap<T> NextEigenOutput() {
-  //  return EigenVectorMap<T>(static_cast<T*>(NextOutput()), span_size_);
-  //}
-
-  //template <typename T>
-  //gsl::span<T> NextSpanOutput() {
-  //  return gsl::span<T>(static_cast<T*>(NextOutput()), span_size_);
-  //}
-
-  //template <typename T>
-  //EigenVectorMap<T> EigenOutput() {
-  //  return EigenOutput(0, span_size_);
-  //}
-
   template <typename T>
   EigenVectorMap<T> EigenOutput(size_t offset, size_t num_elements) {
     assert(offset < span_size_ && (offset + num_elements) <= span_size_);
@@ -857,12 +812,6 @@ struct OutputBroadcaster {
   }
 
  private:
-  //void* NextOutput() {
-  //  void* cur_output = output_bytes_;
-  //  output_bytes_ += (span_size_ * element_size_);
-  //  return cur_output;
-  //}
-
   const size_t element_size_;
   const size_t span_size_;
   size_t output_elements_;
@@ -962,74 +911,45 @@ class BroadcastHelper {
   size_t output_num_elements_{input0_num_elements_};
 };
 
-// Parallelize processing of data where all the output is covered by a single span
-template <typename Input0ScalarFunc, typename Input1ScalarFunc, typename GeneralFunc>
-void ParallelizeSingleSpan(BroadcastHelper& helper,
-                           const Input0ScalarFunc& input0scalar,
-                           const Input1ScalarFunc& input1scalar,
-                           const GeneralFunc& general) {
-  TensorOpCost cost{static_cast<float>(std::max(helper.Input0ElementSize(), helper.Input1ElementSize())),
-                    static_cast<float>(helper.OutputElementSize()),
-                    helper.UnitCost()};
+// functors to use in the low level broadcasting so we don't multiply that code by each operator by each type
+// supported by the operator as would happen if we used lambdas as a template type.
+// TODO: See if we can use Dmitri's Callable class given all the functors take the same argument.
+// Raw pointer is significantly cheaper in terms of binary size at the cost of not being able to capture anything.
+// (With 8 ops converted to this setup there was a 40KB saving (435KB -> 395KB) for element_wise_ops.o.
+// For the few use cases where there is a capture we could add an opaque void* to BroadcastHelper for user context
+// so it can be passed through that way.
+struct BroadcastFunctors {
+  void (*input0scalar)(BroadcastHelper&);
+  void (*input1scalar)(BroadcastHelper&);
+  void (*general)(BroadcastHelper&);
+};
 
-  if (helper.IsInput0Scalar()) {
-    concurrency::ThreadPool::TryParallelFor(
-        helper.Threadpool(), helper.NumOutputElements(), cost,
-        [&helper, &input0scalar](std::ptrdiff_t first, std::ptrdiff_t last) {
-          size_t count = static_cast<size_t>(last - first);
-          // offset=0, num_elements=1 for the scalar input0
-          BroadcastHelper segment_helper(helper, 0, 1, first, count, first, count);
-          input0scalar(segment_helper);
-        });
-  } else if (helper.IsInput1Scalar()) {
-    concurrency::ThreadPool::TryParallelFor(
-        helper.Threadpool(), helper.NumOutputElements(), cost,
-        [&helper, &input1scalar](std::ptrdiff_t first, std::ptrdiff_t last) {
-          size_t count = static_cast<size_t>(last - first);
-          // offset=0, num_elements=1 for the scalar input1
-          BroadcastHelper segment_helper(helper, first, count, 0, 1, first, count);
-          input1scalar(segment_helper);
-        });
+//struct BroadcastFunctorsStd {
+//  std::function<void(BroadcastHelper& iter_helper)> input0scalar;
+//  std::function<void(BroadcastHelper& iter_helper)> input1scalar;
+//  std::function<void(BroadcastHelper& iter_helper)> general;
+//};
 
-  } else {
-    concurrency::ThreadPool::TryParallelFor(
-        helper.Threadpool(), helper.NumOutputElements(), cost,
-        [&helper, &general](std::ptrdiff_t first, std::ptrdiff_t last) {
-          size_t count = static_cast<size_t>(last - first);
-          BroadcastHelper segment_helper(helper, first, count, first, count, first, count);
-          general(segment_helper);
-        });
-  }
-}
+// Helper function to provide the looping logic, calling the appropriate functor for the input
+void BroadcastLooper(BroadcastHelper& helper, const BroadcastFunctors& functors);
 
-// use templatized types for the functions to avoid std::function overhead. there's one combination of types per
-// operator so it doesn't matter if there is one or three types here
-template <typename Input0ScalarFunc, typename Input1ScalarFunc, typename GeneralFunc>
-void BroadcastLooper(BroadcastHelper& helper,
-                     const Input0ScalarFunc& input0scalar,
-                     const Input1ScalarFunc& input1scalar,
-                     const GeneralFunc& general) {
-  if (helper.Threadpool() != nullptr && helper.SingleSpanOutput()) {
-    ParallelizeSingleSpan(helper, input0scalar, input1scalar, general);
-  } else {
-    if (helper.IsInput0Scalar()) {
-      while (helper.NeedMoreOutput()) {
-        input0scalar(helper);
-        helper.Next();
-      }
-    } else if (helper.IsInput1Scalar()) {
-      while (helper.NeedMoreOutput()) {
-        input1scalar(helper);
-        helper.Next();
-      }
-    } else {
-      while (helper.NeedMoreOutput()) {
-        general(helper);
-        helper.Next();
-      }
-    }
-  }
-}
+// Broadcasting across two inputs with no parallelization.
+// This function will setup the BroadcastHelper and pass it back to the op_callback. This is to manage the lifetime
+// of the components within BroadcastHelper cleanly.
+// The op_callback should call BroadcastLooper with the appropriate functors.
+// The reason for this setup is to keep the broadcasting logic untyped to minimize binary size.
+// The operator implementation plugs in the specific types in the implementation of the functors only.
+// All other code is untyped so only one version of it is required (vs. using templates for types and/or lambdas
+// which resulting in duplicating the common code for each unique combination of template types used).
+//
+// TODO: See if we want to use a raw pointer here as well.
+Status UntypedBroadcastTwo(OpKernelContext& context, const std::function<void(BroadcastHelper&)>& op_callback);
+
+// Variant of UntypedBroadcastTwo that will parallelize.
+// Operator usage is the same as the parallelization is opaque to it.
+// unit_cost must be a valid cost.
+Status UntypedBroadcastTwo(OpKernelContext& context, const std::function<void(BroadcastHelper&)>& op_callback,
+                           double unit_cost);
 
 template <typename T>
 struct TensorAllocator {
@@ -1201,72 +1121,6 @@ Status BroadcastVariadic(const Node& node, OpKernelContext& context, Input0Scala
 
     tempInput = std::move(tempOutput);
   }
-  return Status::OK();
-}
-
-// Broadcasting with no parallelization
-template <typename LoopFunc>
-Status UntypedBroadcastTwo(OpKernelContext& context, const LoopFunc& func) {
-  InputBroadcaster input_broadcaster(*context.Input<Tensor>(0), *context.Input<Tensor>(1));
-  OutputBroadcaster output_broadcaster(input_broadcaster.GetSpanSize(),
-                                       *context.Output(0, input_broadcaster.GetOutputShape()));
-  BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster);
-  func(broadcast_helper);
-
-  return Status::OK();
-}
-
-// Parallelized broadcasting.
-template <typename LoopFunc>
-Status UntypedBroadcastTwo(OpKernelContext& context, const LoopFunc& func, double unit_cost) {
-  const Tensor& input0_tensor = *context.Input<Tensor>(0);
-  const Tensor& input1_tensor = *context.Input<Tensor>(1);
-  InputBroadcaster input_broadcaster(input0_tensor, input1_tensor);
-
-  Tensor& output_tensor = *context.Output(0, input_broadcaster.GetOutputShape());
-
-  size_t span_size = input_broadcaster.GetSpanSize();
-  size_t output_size = output_tensor.Shape().Size();
-
-  // one or more zero dimensions so nothing more to do
-  if (output_size == 0) {
-    return Status::OK();
-  }
-
-  // TODO: There was an 'if' with no 'else' for span_size != 0, but a span of 0 should have meant
-  // an output size of zero and this is unreachable
-  assert(span_size != 0);
-
-  concurrency::ThreadPool* tp = context.GetOperatorThreadPool();
-
-  if (span_size == output_size) {  // Only one big span for all data, parallelize inside the span
-    OutputBroadcaster output_broadcaster(span_size, output_tensor);
-    BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster, tp);
-    func(broadcast_helper);
-  } else {
-    // enforce const on input broadcaster we copy from
-    const InputBroadcaster& const_input_broadcaster = input_broadcaster;
-
-    concurrency::ThreadPool::TryParallelFor(
-        tp, output_size / span_size,
-        TensorOpCost{static_cast<float>(input_broadcaster.Input0ElementSize()) * span_size,
-                     static_cast<float>(output_tensor.DataType()->Size()) * span_size,
-                     unit_cost * span_size},
-        [span_size, &const_input_broadcaster, &output_tensor, &func](std::ptrdiff_t first_span,
-                                                                     std::ptrdiff_t last_span) {
-          // copy from original and advance
-          InputBroadcaster segment_input_broadcaster(const_input_broadcaster);
-          segment_input_broadcaster.AdvanceBy(first_span * span_size);
-
-          // create broadcaster for this segment of output
-          OutputBroadcaster segment_output_broadcaster(span_size, output_tensor,
-                                                       first_span * span_size, last_span * span_size);
-
-          BroadcastHelper segment_helper(segment_input_broadcaster, segment_output_broadcaster);
-          func(segment_helper);
-        });
-  }
-
   return Status::OK();
 }
 
