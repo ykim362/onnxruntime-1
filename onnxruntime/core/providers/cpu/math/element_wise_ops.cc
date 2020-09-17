@@ -217,7 +217,7 @@ ONNX_CPU_OPERATOR_KERNEL(
 
 template <typename T>
 Status Add<T>::Compute(OpKernelContext* context) const {
-  const auto looper = [](BroadcastHelper& helper) {
+  const auto callback = [](BroadcastHelper& helper) {
     BroadcastLooper(
         helper,
         // BroadcastHelper received as argument may differ from 'helper' when parallelizing within a span
@@ -233,13 +233,13 @@ Status Add<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, looper /*, 1.0f*/);
+  auto status = UntypedBroadcastTwo(*context, callback /*, 1.0f*/);
   return status;
 }
 
 template <typename T>
 Status Sub<T>::Compute(OpKernelContext* context) const {
-  const auto looper = [](BroadcastHelper& helper) {
+  const auto callback = [](BroadcastHelper& helper) {
     BroadcastLooper(
         helper,
         BroadcastFunctors{
@@ -254,13 +254,13 @@ Status Sub<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, looper, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
   return status;
 }
 
 template <typename T>
 Status Mul<T>::Compute(OpKernelContext* context) const {
-  const auto looper = [](BroadcastHelper& helper) {
+  const auto callback = [](BroadcastHelper& helper) {
     BroadcastLooper(
         helper,
         BroadcastFunctors{
@@ -275,13 +275,13 @@ Status Mul<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, looper, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
   return status;
 }
 
 template <typename T>
 Status Div<T>::Compute(OpKernelContext* context) const {
-  const auto looper = [](BroadcastHelper& helper) {
+  const auto callback = [](BroadcastHelper& helper) {
     BroadcastLooper(
         helper,
         BroadcastFunctors{
@@ -296,7 +296,7 @@ Status Div<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, looper, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
   return status;
 }
 
@@ -525,67 +525,104 @@ Status Not::Compute(OpKernelContext* context) const {
 
 Status And::Compute(OpKernelContext* context) const {
   // The scalar cases are special cased, since 'X && true = X' and 'X && false = false'
-  return BroadcastTwo<bool, bool>(
-      *context,
-      [](EigenVectorMap<bool> output, bool input0, ConstEigenVectorMap<bool> input1) {
-        if (input0)
-          output = input1;
-        else
-          output.array() = false;
-      },
-      [](EigenVectorMap<bool> output, ConstEigenVectorMap<bool> input0, bool input1) {
-        if (input1)
-          output = input0;
-        else
-          output.array() = false;
-      },
-      [](EigenVectorMap<bool> output, ConstEigenVectorMap<bool> input0, ConstEigenVectorMap<bool> input1) { output = input0.array() && input1.array(); },
-      1.0f);
+  const auto callback = [](BroadcastHelper& helper) {
+    BroadcastLooper(
+        helper,
+        BroadcastFunctors{
+            [](BroadcastHelper& per_iter_bh) {
+              bool input0 = per_iter_bh.ScalarInput0<bool>();
+              auto output = per_iter_bh.OutputEigen<bool>();
+              if (input0)
+                output = per_iter_bh.EigenInput1<bool>();
+              else
+                output.array() = false;
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              bool input1 = per_iter_bh.ScalarInput1<bool>();
+              auto output = per_iter_bh.OutputEigen<bool>();
+              if (input1)
+                output = per_iter_bh.EigenInput0<bool>();
+              else
+                output.array() = false;
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              per_iter_bh.OutputEigen<bool>() =
+                  per_iter_bh.EigenInput0<bool>().array() && per_iter_bh.EigenInput1<bool>().array();
+            }});
+  };
+
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  return status;
 }
 
 Status Or::Compute(OpKernelContext* context) const {
   // The scalar cases are special cased, since 'X || true = true' and 'X || false = X'
-  return BroadcastTwo<bool, bool>(
-      *context,
-      [](EigenVectorMap<bool> output, bool input0, ConstEigenVectorMap<bool> input1) {
-        if (input0)
-          output.array() = true;
-        else
-          output = input1;
-      },
-      [](EigenVectorMap<bool> output, ConstEigenVectorMap<bool> input0, bool input1) {
-        if (input1)
-          output.array() = true;
-        else
-          output = input0;
-      },
-      [](EigenVectorMap<bool> output, ConstEigenVectorMap<bool> input0, ConstEigenVectorMap<bool> input1) { output = input0.array() || input1.array(); },
-      1.0f);
+  const auto callback = [](BroadcastHelper& helper) {
+    BroadcastLooper(
+        helper,
+        BroadcastFunctors{
+            [](BroadcastHelper& per_iter_bh) {
+              bool input0 = per_iter_bh.ScalarInput0<bool>();
+              auto output = per_iter_bh.OutputEigen<bool>();
+              if (input0)
+                output.array() = true;
+              else
+                output = per_iter_bh.EigenInput1<bool>();
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              bool input1 = per_iter_bh.ScalarInput1<bool>();
+              auto output = per_iter_bh.OutputEigen<bool>();
+              if (input1)
+                output.array() = true;
+              else
+                output = per_iter_bh.EigenInput0<bool>().array();
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              per_iter_bh.OutputEigen<bool>() =
+                  per_iter_bh.EigenInput0<bool>().array() || per_iter_bh.EigenInput1<bool>().array();
+            }});
+  };
+
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  return status;
 }
 
 Status Xor::Compute(OpKernelContext* context) const {
-  // The scalar cases are special cased, since 'X ^ true = !X' and 'X ^ false = X'
-  return BroadcastTwo<bool, bool>(
-      *context,
-      [](EigenVectorMap<bool> output, bool input0, ConstEigenVectorMap<bool> input1) {
-        if (input0)
-          output.array() = !input1.array();
-        else
-          output = input1;
-      },
-      [](EigenVectorMap<bool> output, ConstEigenVectorMap<bool> input0, bool input1) {
-        if (input1)
-          output.array() = !input0.array();
-        else
-          output = input0;
-      },
-      [](EigenVectorMap<bool> output, ConstEigenVectorMap<bool> input0, ConstEigenVectorMap<bool> input1) { output = input0.array() ^ input1.array(); },
-      1.0f);
+  const auto callback = [](BroadcastHelper& helper) {
+    BroadcastLooper(
+        helper,
+        BroadcastFunctors{
+            [](BroadcastHelper& per_iter_bh) {
+              bool input0 = per_iter_bh.ScalarInput0<bool>();
+              auto input1 = per_iter_bh.EigenInput0<bool>();
+              auto output = per_iter_bh.OutputEigen<bool>();
+              if (input0)
+                output.array() = !input1.array();
+              else
+                output = input1;
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              auto input0 = per_iter_bh.EigenInput0<bool>();
+              bool input1 = per_iter_bh.ScalarInput1<bool>();
+              auto output = per_iter_bh.OutputEigen<bool>();
+              if (input1)
+                output.array() = !input0.array();
+              else
+                output = input0;
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              per_iter_bh.OutputEigen<bool>() =
+                  per_iter_bh.EigenInput0<bool>().array() ^ per_iter_bh.EigenInput1<bool>().array();
+            }});
+  };
+
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  return status;
 }
 
 template <typename T>
 Status Equal<T>::Compute(OpKernelContext* context) const {
-  const auto looper = [](BroadcastHelper& helper) {
+  const auto callback = [](BroadcastHelper& helper) {
     BroadcastLooper(
         helper,
         BroadcastFunctors{
@@ -601,13 +638,13 @@ Status Equal<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, looper, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
   return status;
 }
 
 template <typename T>
 Status Less<T>::Compute(OpKernelContext* context) const {
-  const auto looper = [](BroadcastHelper& helper) {
+  const auto callback = [](BroadcastHelper& helper) {
     BroadcastLooper(
         helper,
         BroadcastFunctors{
@@ -622,13 +659,13 @@ Status Less<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, looper, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
   return status;
 }
 
 template <typename T>
 Status Greater<T>::Compute(OpKernelContext* context) const {
-  const auto looper = [](BroadcastHelper& helper) {
+  const auto callback = [](BroadcastHelper& helper) {
     BroadcastLooper(
         helper,
         BroadcastFunctors{
@@ -644,7 +681,7 @@ Status Greater<T>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, looper, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
   return status;
 }
 
@@ -709,50 +746,69 @@ BitShift<T>::BitShift(const OpKernelInfo& info) : OpKernel(info) {
 
 template <typename T>
 Status BitShift<T>::Compute(OpKernelContext* context) const {
-  return BroadcastTwo<T, T>(
-      *context,
-      [this](EigenVectorMap<T> output, T input0, ConstEigenVectorMap<T> input1) {
-        int64_t i = 0;
-        if (shift_left_) {
-          for (const auto& input : input1.array()) {
-            output[i++] = input0 << input;
-          }
-        } else {
-          for (const auto& input : input1.array()) {
-            output[i++] = input0 >> input;
-          }
-        }
-      },
-      [this](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, T input1) {
-        int64_t i = 0;
-        if (shift_left_) {
-          for (const auto& input : input0.array()) {
-            output[i++] = input << input1;
-          }
-        } else {
-          for (const auto& input : input0.array()) {
-            output[i++] = input >> input1;
-          }
-        }
-      },
-      [this](EigenVectorMap<T> output, ConstEigenVectorMap<T> input0, ConstEigenVectorMap<T> input1) {
-        auto cur0 = input0.begin(), end0 = input0.end();
-        auto cur1 = input1.begin(), end1 = input1.end();
-        auto cur_out = output.begin(), end_out = output.end();
-        if (shift_left_) {
-          for (; cur0 != end0; ++cur0, ++cur1, ++cur_out) {
-            *cur_out = *cur0 << *cur1;
-          }
-        } else {
-          for (; cur0 != end0; ++cur0, ++cur1, ++cur_out) {
-            *cur_out = *cur0 >> *cur1;
-          }
-        }
+  const auto callback = [this](BroadcastHelper& helper) {
+    helper.SetUserData(reinterpret_cast<void*>(shift_left_));  // set void* to value of bool (doesn't need to be address of)
+    BroadcastLooper(
+        helper,
+        BroadcastFunctors{
+            [](BroadcastHelper& per_iter_bh) {
+              bool shift_left = per_iter_bh.GetUserData();
+              const T& input0 = per_iter_bh.ScalarInput0<T>();
+              auto input1 = per_iter_bh.EigenInput1<T>();
+              auto output = per_iter_bh.OutputEigen<T>();
+              int64_t i = 0;
+              if (shift_left) {
+                for (const auto& input : input1.array()) {
+                  output[i++] = input0 << input;
+                }
+              } else {
+                for (const auto& input : input1.array()) {
+                  output[i++] = input0 >> input;
+                }
+              }
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              bool shift_left = per_iter_bh.GetUserData();
+              auto input0 = per_iter_bh.EigenInput0<T>();
+              const T& input1 = per_iter_bh.ScalarInput1<T>();
+              auto output = per_iter_bh.OutputEigen<T>();
+              int64_t i = 0;
+              if (shift_left) {
+                for (const auto& input : input0.array()) {
+                  output[i++] = input << input1;
+                }
+              } else {
+                for (const auto& input : input0.array()) {
+                  output[i++] = input >> input1;
+                }
+              }
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              bool shift_left = per_iter_bh.GetUserData();
+              auto input0 = per_iter_bh.EigenInput0<T>();
+              auto input1 = per_iter_bh.EigenInput1<T>();
+              auto output = per_iter_bh.OutputEigen<T>();
 
-        ORT_ENFORCE(cur1 == end1);
-        ORT_ENFORCE(cur_out == end_out);
-      },
-      1.0f);
+              auto cur0 = input0.begin(), end0 = input0.end();
+              auto cur1 = input1.begin(), end1 = input1.end();
+              auto cur_out = output.begin(), end_out = output.end();
+              if (shift_left) {
+                for (; cur0 != end0; ++cur0, ++cur1, ++cur_out) {
+                  *cur_out = *cur0 << *cur1;
+                }
+              } else {
+                for (; cur0 != end0; ++cur0, ++cur1, ++cur_out) {
+                  *cur_out = *cur0 >> *cur1;
+                }
+              }
+
+              ORT_ENFORCE(cur1 == end1);
+              ORT_ENFORCE(cur_out == end_out);
+            }});
+  };
+
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
+  return status;
 }
 
 template <typename T>
@@ -1021,7 +1077,7 @@ ONNX_CPU_OPERATOR_KERNEL(
 
 template <>
 Status PRelu<float>::Compute(OpKernelContext* context) const {
-  const auto looper = [](BroadcastHelper& helper) {
+  const auto callback = [](BroadcastHelper& helper) {
     BroadcastLooper(
         helper,
         BroadcastFunctors{
@@ -1044,7 +1100,7 @@ Status PRelu<float>::Compute(OpKernelContext* context) const {
             }});
   };
 
-  auto status = UntypedBroadcastTwo(*context, looper, 1.0f);
+  auto status = UntypedBroadcastTwo(*context, callback, 1.0f);
   return status;
 }
 

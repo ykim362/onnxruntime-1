@@ -431,9 +431,14 @@ class Erf final : public OpKernel {
 };
 
 template <typename T>
-auto MakeEigenArrayMap(Tensor& t) -> EigenVectorArrayMap<T> { return EigenVectorArrayMap<T>(t.template MutableData<T>(), t.Shape().Size()); }
+auto MakeEigenArrayMap(Tensor& t) -> EigenVectorArrayMap<T> {
+  return EigenVectorArrayMap<T>(t.template MutableData<T>(), t.Shape().Size());
+}
+
 template <typename T>
-auto MakeEigenArrayMap(const Tensor& t) -> ConstEigenVectorArrayMap<T> { return ConstEigenVectorArrayMap<T>(t.template Data<T>(), t.Shape().Size()); }
+auto MakeEigenArrayMap(const Tensor& t) -> ConstEigenVectorArrayMap<T> {
+  return ConstEigenVectorArrayMap<T>(t.template Data<T>(), t.Shape().Size());
+}
 
 struct BroadcastIterator {
   size_t Current() const { return index_; }
@@ -744,15 +749,17 @@ struct InputBroadcaster {
                                   num_elements);
   }
 
-  // TODO: Add span support. Convert from Next* to returning current value
-  //template <typename T>
-  //gsl::span<const T> NextSpan0() {
-  //  return gsl::span<const T>(static_cast<const T*>(Next0()), span_size_);
-  //}
-  //template <typename T>
-  //gsl::span<const T> NextSpan1() {
-  //  return gsl::span<const T>(static_cast<const T*>(Next1()), span_size_);
-  //}
+  template <typename T>
+  gsl::span<const T> Span0(size_t offset, size_t num_elements) {
+    return gsl::span<const T>(static_cast<const T*>(input0_bytes_) + broadcaster_.iterator1_.Current() + offset,
+                              num_elements);
+  }
+
+  template <typename T>
+  gsl::span<const T> Span1(size_t offset, size_t num_elements) {
+    return gsl::span<const T>(static_cast<const T*>(input1_bytes_) + broadcaster_.iterator2_.Current() + offset,
+                              num_elements);
+  }
 
   void Next() {
     AdvanceBy(span_size_);
@@ -802,10 +809,11 @@ struct OutputBroadcaster {
     return EigenVectorMap<T>(reinterpret_cast<T*>(output_bytes_) + offset, num_elements);
   }
 
-  //template <typename T>
-  //gsl::span<T> SpanOutput() {
-  //  return gsl::span<T>(static_cast<T*>(output_bytes_), span_size_);
-  //}
+  template <typename T>
+  gsl::span<T> SpanOutput(size_t offset, size_t num_elements) {
+    assert(offset < span_size_ && (offset + num_elements) <= span_size_);
+    return gsl::span<T>(reinterpret_cast<T*>(output_bytes_) + offset, num_elements);
+  }
 
   void Next() {
     output_bytes_ += (span_size_ * element_size_);
@@ -821,7 +829,7 @@ struct OutputBroadcaster {
 
 class BroadcastHelper {
  public:
-  // top level broadcaster
+  // ctor when not parallelizing
   BroadcastHelper(InputBroadcaster& input_broadcaster,
                   OutputBroadcaster& output_broadcaster,
                   concurrency::ThreadPool* tp = nullptr,
@@ -832,7 +840,21 @@ class BroadcastHelper {
         unit_cost_(unit_cost) {
   }
 
-  // ctor for use when we parallelize within a span
+  // ctor when we parallelize multiple spans.
+  // InputBroadcaster should be at the start of the input as it will be advanced by input_offset
+  BroadcastHelper(InputBroadcaster& input_broadcaster,
+                  OutputBroadcaster& output_broadcaster,
+                  size_t input_offset,
+                  size_t output_offset, size_t output_num_elements)
+      : input_broadcaster_(input_broadcaster),
+        output_broadcaster_(output_broadcaster),
+        output_offset_(output_offset),
+        output_num_elements_(output_num_elements) {
+    input_broadcaster_.AdvanceBy(input_offset);
+  }
+
+  // ctor for use when we parallelize within a span.
+  // we need to copy user_data_ in this case as the user will have had a chance to set it
   BroadcastHelper(const BroadcastHelper& rhs,
                   size_t input0_offset, size_t input0_num_elements,
                   size_t input1_offset, size_t input1_num_elements,
@@ -844,20 +866,8 @@ class BroadcastHelper {
         input1_offset_(input1_offset),
         input1_num_elements_(input1_num_elements),
         output_offset_(output_offset),
-        output_num_elements_(output_num_elements) {
-  }
-
-  // ctor for use when we parallelize multiple spans.
-  // InputBroadcaster should be at the start of the input as it will be advanced by input_offset
-  BroadcastHelper(InputBroadcaster& input_broadcaster,
-                  OutputBroadcaster& output_broadcaster,
-                  size_t input_offset,
-                  size_t output_offset, size_t output_num_elements)
-      : input_broadcaster_(input_broadcaster),
-        output_broadcaster_(output_broadcaster),
-        output_offset_(output_offset),
-        output_num_elements_(output_num_elements) {
-    input_broadcaster_.AdvanceBy(input_offset);
+        output_num_elements_(output_num_elements),
+        user_data_(rhs.user_data_) {
   }
 
   bool IsInput0Scalar() const { return input_broadcaster_.IsInput0Scalar(); }
@@ -896,6 +906,11 @@ class BroadcastHelper {
   concurrency::ThreadPool* Threadpool() const { return threadpool_; }
   double UnitCost() const { return unit_cost_; }
 
+  // user data is an opaque blob. there is no memory management provided by BroadcastHelper.
+  // if the BroadcastHelper instance is copied during parallelization the pointer will be copied across
+  void SetUserData(void* user_data) { user_data_ = user_data; }
+  void* GetUserData() const { return user_data_; }
+
  private:
   InputBroadcaster& input_broadcaster_;
   OutputBroadcaster& output_broadcaster_;
@@ -909,6 +924,7 @@ class BroadcastHelper {
   size_t input1_num_elements_{input0_num_elements_};
   size_t output_offset_{0};
   size_t output_num_elements_{input0_num_elements_};
+  void* user_data_{nullptr};
 };
 
 // functors to use in the low level broadcasting so we don't multiply that code by each operator by each type
@@ -942,7 +958,10 @@ void BroadcastLooper(BroadcastHelper& helper, const BroadcastFunctors& functors)
 // All other code is untyped so only one version of it is required (vs. using templates for types and/or lambdas
 // which resulting in duplicating the common code for each unique combination of template types used).
 //
-// TODO: See if we want to use a raw pointer here as well.
+// TODO: See if we want to use a raw pointer here as well. This is only called once during the operator Compute
+// so a little cost of std::function isn't too bad. Makes it simpler for the operator to plug user data into
+// BroadcastHelper. Alternatively we could take a void* here for user_data and plug it in when creating the
+// BroadcastHelper if there are savings from using a raw pointer.
 Status UntypedBroadcastTwo(OpKernelContext& context, const std::function<void(BroadcastHelper&)>& op_callback);
 
 // Variant of UntypedBroadcastTwo that will parallelize.
@@ -1007,6 +1026,7 @@ void BroadcastLoopSpan(TBroadcaster& bc, Output& output, Input0Scalar input0scal
   }
 }
 
+/*
 template <typename TInput, typename TOutput, typename Input0Scalar, typename Input1Scalar, typename General>
 void BroadcastOneSpan(concurrency::ThreadPool* tp, double unit_cost, TOutput* output_ptr, int64_t output_size,
                       const TInput* input0_ptr, int64_t input0_size, const TInput* input1_ptr, int64_t input1_size,
@@ -1082,6 +1102,7 @@ Status BroadcastTwo(OpKernelContext& context, Input0Scalar input0scalar, Input1S
   }
   return Status::OK();
 }
+*/
 
 template <typename TInput, typename TOutput, typename Input0Scalar, typename Input1Scalar, typename General>
 Status BroadcastVariadic(const Node& node, OpKernelContext& context, Input0Scalar input0scalar, Input1Scalar input1scalar, General general) {
