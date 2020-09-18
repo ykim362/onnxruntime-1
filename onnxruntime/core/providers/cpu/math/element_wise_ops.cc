@@ -216,93 +216,84 @@ ONNX_CPU_OPERATOR_KERNEL(
         .TypeConstraint("T1", DataTypeImpl::GetTensorType<bool>()),
     Xor);
 
-static void UntypedBroadcastVariadic(
-    int input_count, OpKernelContext& context,
-    std::unique_ptr<Tensor> (*allocate_tensor)(const TensorAllocator& tensor_allocator, const TensorShape& shape),
-    void (*op_callback)(BroadcastHelper&));
+static void UntypedBroadcastTwo(OpKernelContext& context, const ProcessBroadcastSpanFuncs& funcs,
+                                void* user_data = nullptr);
+static void UntypedBroadcastTwo(OpKernelContext& context, const ProcessBroadcastSpanFuncs& funcs, double unit_cost,
+                                void* user_data = nullptr);
+
+using AllocateTensorFunc = std::unique_ptr<Tensor> (*)(const TensorAllocator& tensor_allocator,
+                                                       const TensorShape& shape);
+
+static void UntypedBroadcastVariadic(int input_count, OpKernelContext& context,
+                                     AllocateTensorFunc allocate_tensor,
+                                     const ProcessBroadcastSpanFuncs& funcs);
 
 template <typename T>
 Status Add<T>::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        // BroadcastHelper received as argument may differ from 'helper' when parallelizing within a span
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.ScalarInput0<T>() + per_iter_bh.EigenInput1<T>().array();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().array() + per_iter_bh.ScalarInput1<T>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>() + per_iter_bh.EigenInput1<T>();
-            }});
-  };
+  // BroadcastHelper received as argument may differ from 'helper' when parallelizing within a span
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.ScalarInput0<T>() + per_iter_bh.EigenInput1<T>().array();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().array() + per_iter_bh.ScalarInput1<T>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>() + per_iter_bh.EigenInput1<T>();
+      }};
 
-  UntypedBroadcastTwo(*context, callback /*, 1.0f*/);
+  UntypedBroadcastTwo(*context, funcs, 1.0f);
   return Status::OK();
 }
 
 template <typename T>
 Status Sub<T>::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.ScalarInput0<T>() - per_iter_bh.EigenInput1<T>().array();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().array() - per_iter_bh.ScalarInput1<T>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>() - per_iter_bh.EigenInput1<T>();
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.ScalarInput0<T>() - per_iter_bh.EigenInput1<T>().array();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().array() - per_iter_bh.ScalarInput1<T>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>() - per_iter_bh.EigenInput1<T>();
+      }};
 
-  UntypedBroadcastTwo(*context, callback, 1.0);
+  UntypedBroadcastTwo(*context, funcs, 1.0);
   return Status::OK();
 }
 
 template <typename T>
 Status Mul<T>::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.ScalarInput0<T>() * per_iter_bh.EigenInput1<T>().array();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().array() * per_iter_bh.ScalarInput1<T>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().cwiseProduct(per_iter_bh.EigenInput1<T>());
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.ScalarInput0<T>() * per_iter_bh.EigenInput1<T>().array();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().array() * per_iter_bh.ScalarInput1<T>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().cwiseProduct(per_iter_bh.EigenInput1<T>());
+      }};
 
-  UntypedBroadcastTwo(*context, callback, 1.0);
+  UntypedBroadcastTwo(*context, funcs, 1.0);
   return Status::OK();
 }
 
 template <typename T>
 Status Div<T>::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.ScalarInput0<T>() / per_iter_bh.EigenInput1<T>().array();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().array() / per_iter_bh.ScalarInput1<T>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().cwiseQuotient(per_iter_bh.EigenInput1<T>());
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.ScalarInput0<T>() / per_iter_bh.EigenInput1<T>().array();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().array() / per_iter_bh.ScalarInput1<T>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>().cwiseQuotient(per_iter_bh.EigenInput1<T>());
+      }};
 
-  UntypedBroadcastTwo(*context, callback, 1.0);
+  UntypedBroadcastTwo(*context, funcs, 1.0);
   return Status::OK();
 }
 
@@ -310,57 +301,53 @@ namespace pow_internal {
 
 template <typename T, typename E>
 void PowImpl(OpKernelContext& context) {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              const T X = per_iter_bh.ScalarInput0<T>();
-              auto Y = per_iter_bh.SpanInput1<E>();
-              auto output = per_iter_bh.OutputSpan<T>();
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        const T X = per_iter_bh.ScalarInput0<T>();
+        auto Y = per_iter_bh.SpanInput1<E>();
+        auto output = per_iter_bh.OutputSpan<T>();
 
-              std::transform(Y.cbegin(), Y.cend(), output.begin(),
-                             [X](E y) {
-                               return static_cast<T>(std::pow(X, y));
-                             });
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto X = per_iter_bh.SpanInput0<T>();
-              const E Y = per_iter_bh.ScalarInput1<E>();
-              auto output = per_iter_bh.OutputSpan<T>();
+        std::transform(Y.cbegin(), Y.cend(), output.begin(),
+                       [X](E y) {
+                         return static_cast<T>(std::pow(X, y));
+                       });
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto X = per_iter_bh.SpanInput0<T>();
+        const E Y = per_iter_bh.ScalarInput1<E>();
+        auto output = per_iter_bh.OutputSpan<T>();
 
-              // optimize for X^2 and X^3
-              if (Y == 2) {
-                std::transform(X.cbegin(), X.cend(), output.begin(),
-                               [](T x) {
-                                 return static_cast<T>(x * x);
-                               });
+        // optimize for X^2 and X^3
+        if (Y == 2) {
+          std::transform(X.cbegin(), X.cend(), output.begin(),
+                         [](T x) {
+                           return static_cast<T>(x * x);
+                         });
 
-              } else if (Y == 3) {
-                std::transform(X.cbegin(), X.cend(), output.begin(),
-                               [](T x) {
-                                 return static_cast<T>(x * x * x);
-                               });
-              } else {
-                std::transform(X.cbegin(), X.cend(), output.begin(),
-                               [Y](T x) {
-                                 return static_cast<T>(std::pow(x, Y));
-                               });
-              }
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto X = per_iter_bh.SpanInput0<T>();
-              auto Y = per_iter_bh.SpanInput1<E>();
-              auto output = per_iter_bh.OutputSpan<T>();
+        } else if (Y == 3) {
+          std::transform(X.cbegin(), X.cend(), output.begin(),
+                         [](T x) {
+                           return static_cast<T>(x * x * x);
+                         });
+        } else {
+          std::transform(X.cbegin(), X.cend(), output.begin(),
+                         [Y](T x) {
+                           return static_cast<T>(std::pow(x, Y));
+                         });
+        }
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto X = per_iter_bh.SpanInput0<T>();
+        auto Y = per_iter_bh.SpanInput1<E>();
+        auto output = per_iter_bh.OutputSpan<T>();
 
-              std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
-                             [](T x, E y) {
-                               return static_cast<T>(std::pow(x, y));
-                             });
-            }});
-  };
+        std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
+                       [](T x, E y) {
+                         return static_cast<T>(std::pow(x, y));
+                       });
+      }};
 
-  UntypedBroadcastTwo(context, callback, 1.0);
+  UntypedBroadcastTwo(context, funcs, 1.0);
 }
 
 template <typename B>
@@ -446,30 +433,26 @@ Status Sum_6<float>::Compute(OpKernelContext* ctx) const {
 
 template <>
 Status Sum_8<float>::Compute(OpKernelContext* context) const {
-  const auto allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
+  const auto typed_allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
     return tensor_allocator.Allocate<float>(shape);
   };
 
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<float>() =
-                  per_iter_bh.ScalarInput0<float>() + per_iter_bh.EigenInput1<float>().array();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<float>() =
-                  per_iter_bh.EigenInput0<float>().array() + per_iter_bh.ScalarInput1<float>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<float>() =
-                  per_iter_bh.EigenInput0<float>() + per_iter_bh.EigenInput1<float>();
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<float>() =
+            per_iter_bh.ScalarInput0<float>() + per_iter_bh.EigenInput1<float>().array();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<float>() =
+            per_iter_bh.EigenInput0<float>().array() + per_iter_bh.ScalarInput1<float>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<float>() =
+            per_iter_bh.EigenInput0<float>() + per_iter_bh.EigenInput1<float>();
+      }};
 
   int input_count = Node().InputArgCount().front();
-  UntypedBroadcastVariadic(input_count, *context, allocator, callback);
+  UntypedBroadcastVariadic(input_count, *context, typed_allocator, funcs);
 
   return Status::OK();
 }
@@ -495,30 +478,26 @@ Status Min_6<float>::Compute(OpKernelContext* ctx) const {
 template <typename T>
 struct Min_8::ComputeImpl {
   Status operator()(const Min_8& inst, OpKernelContext* context) const {
-    const auto allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
+    const auto typed_allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
       return tensor_allocator.Allocate<T>(shape);
     };
 
-    const auto callback = [](BroadcastHelper& helper) {
-      BroadcastLooper(
-          helper,
-          BroadcastFunctors{
-              [](BroadcastHelper& per_iter_bh) {
-                per_iter_bh.OutputEigen<T>() =
-                    per_iter_bh.EigenInput1<T>().array().min(per_iter_bh.ScalarInput0<T>());
-              },
-              [](BroadcastHelper& per_iter_bh) {
-                per_iter_bh.OutputEigen<T>() =
-                    per_iter_bh.EigenInput0<T>().array().min(per_iter_bh.ScalarInput1<T>());
-              },
-              [](BroadcastHelper& per_iter_bh) {
-                per_iter_bh.OutputEigen<T>() =
-                    per_iter_bh.EigenInput0<T>().array().min(per_iter_bh.EigenInput1<T>().array());
-              }});
-    };
+    ProcessBroadcastSpanFuncs funcs{
+        [](BroadcastHelper& per_iter_bh) {
+          per_iter_bh.OutputEigen<T>() =
+              per_iter_bh.EigenInput1<T>().array().min(per_iter_bh.ScalarInput0<T>());
+        },
+        [](BroadcastHelper& per_iter_bh) {
+          per_iter_bh.OutputEigen<T>() =
+              per_iter_bh.EigenInput0<T>().array().min(per_iter_bh.ScalarInput1<T>());
+        },
+        [](BroadcastHelper& per_iter_bh) {
+          per_iter_bh.OutputEigen<T>() =
+              per_iter_bh.EigenInput0<T>().array().min(per_iter_bh.EigenInput1<T>().array());
+        }};
 
     int input_count = inst.Node().InputArgCount().front();
-    UntypedBroadcastVariadic(input_count, *context, allocator, callback);
+    UntypedBroadcastVariadic(input_count, *context, typed_allocator, funcs);
 
     return Status::OK();
   }
@@ -551,30 +530,26 @@ Status Max_6<float>::Compute(OpKernelContext* ctx) const {
 template <typename T>
 struct Max_8::ComputeImpl {
   Status operator()(const Max_8& inst, OpKernelContext* context) const {
-    const auto allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
+    const auto typed_allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
       return tensor_allocator.Allocate<T>(shape);
     };
 
-    const auto callback = [](BroadcastHelper& helper) {
-      BroadcastLooper(
-          helper,
-          BroadcastFunctors{
-              [](BroadcastHelper& per_iter_bh) {
-                per_iter_bh.OutputEigen<T>() =
-                    per_iter_bh.EigenInput1<T>().array().max(per_iter_bh.ScalarInput0<T>());
-              },
-              [](BroadcastHelper& per_iter_bh) {
-                per_iter_bh.OutputEigen<T>() =
-                    per_iter_bh.EigenInput0<T>().array().max(per_iter_bh.ScalarInput1<T>());
-              },
-              [](BroadcastHelper& per_iter_bh) {
-                per_iter_bh.OutputEigen<T>() =
-                    per_iter_bh.EigenInput0<T>().array().max(per_iter_bh.EigenInput1<T>().array());
-              }});
-    };
+    ProcessBroadcastSpanFuncs funcs{
+        [](BroadcastHelper& per_iter_bh) {
+          per_iter_bh.OutputEigen<T>() =
+              per_iter_bh.EigenInput1<T>().array().max(per_iter_bh.ScalarInput0<T>());
+        },
+        [](BroadcastHelper& per_iter_bh) {
+          per_iter_bh.OutputEigen<T>() =
+              per_iter_bh.EigenInput0<T>().array().max(per_iter_bh.ScalarInput1<T>());
+        },
+        [](BroadcastHelper& per_iter_bh) {
+          per_iter_bh.OutputEigen<T>() =
+              per_iter_bh.EigenInput0<T>().array().max(per_iter_bh.EigenInput1<T>().array());
+        }};
 
     int input_count = inst.Node().InputArgCount().front();
-    UntypedBroadcastVariadic(input_count, *context, allocator, callback);
+    UntypedBroadcastVariadic(input_count, *context, typed_allocator, funcs);
 
     return Status::OK();
   }
@@ -596,163 +571,139 @@ Status Not::Compute(OpKernelContext* context) const {
 
 Status And::Compute(OpKernelContext* context) const {
   // The scalar cases are special cased, since 'X && true = X' and 'X && false = false'
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              bool input0 = per_iter_bh.ScalarInput0<bool>();
-              auto output = per_iter_bh.OutputEigen<bool>();
-              if (input0)
-                output = per_iter_bh.EigenInput1<bool>();
-              else
-                output.array() = false;
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              bool input1 = per_iter_bh.ScalarInput1<bool>();
-              auto output = per_iter_bh.OutputEigen<bool>();
-              if (input1)
-                output = per_iter_bh.EigenInput0<bool>();
-              else
-                output.array() = false;
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() =
-                  per_iter_bh.EigenInput0<bool>().array() && per_iter_bh.EigenInput1<bool>().array();
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        bool input0 = per_iter_bh.ScalarInput0<bool>();
+        auto output = per_iter_bh.OutputEigen<bool>();
+        if (input0)
+          output = per_iter_bh.EigenInput1<bool>();
+        else
+          output.array() = false;
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        bool input1 = per_iter_bh.ScalarInput1<bool>();
+        auto output = per_iter_bh.OutputEigen<bool>();
+        if (input1)
+          output = per_iter_bh.EigenInput0<bool>();
+        else
+          output.array() = false;
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() =
+            per_iter_bh.EigenInput0<bool>().array() && per_iter_bh.EigenInput1<bool>().array();
+      }};
 
-  UntypedBroadcastTwo(*context, callback, 1.0);
+  UntypedBroadcastTwo(*context, funcs, 1.0);
   return Status::OK();
 }
 
 Status Or::Compute(OpKernelContext* context) const {
   // The scalar cases are special cased, since 'X || true = true' and 'X || false = X'
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              bool input0 = per_iter_bh.ScalarInput0<bool>();
-              auto output = per_iter_bh.OutputEigen<bool>();
-              if (input0)
-                output.array() = true;
-              else
-                output = per_iter_bh.EigenInput1<bool>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              bool input1 = per_iter_bh.ScalarInput1<bool>();
-              auto output = per_iter_bh.OutputEigen<bool>();
-              if (input1)
-                output.array() = true;
-              else
-                output = per_iter_bh.EigenInput0<bool>().array();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() =
-                  per_iter_bh.EigenInput0<bool>().array() || per_iter_bh.EigenInput1<bool>().array();
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        bool input0 = per_iter_bh.ScalarInput0<bool>();
+        auto output = per_iter_bh.OutputEigen<bool>();
+        if (input0)
+          output.array() = true;
+        else
+          output = per_iter_bh.EigenInput1<bool>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        bool input1 = per_iter_bh.ScalarInput1<bool>();
+        auto output = per_iter_bh.OutputEigen<bool>();
+        if (input1)
+          output.array() = true;
+        else
+          output = per_iter_bh.EigenInput0<bool>().array();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() =
+            per_iter_bh.EigenInput0<bool>().array() || per_iter_bh.EigenInput1<bool>().array();
+      }};
 
-  UntypedBroadcastTwo(*context, callback, 1.0);
+  UntypedBroadcastTwo(*context, funcs, 1.0);
   return Status::OK();
 }
 
 Status Xor::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              bool input0 = per_iter_bh.ScalarInput0<bool>();
-              auto input1 = per_iter_bh.EigenInput0<bool>();
-              auto output = per_iter_bh.OutputEigen<bool>();
-              if (input0)
-                output.array() = !input1.array();
-              else
-                output = input1;
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto input0 = per_iter_bh.EigenInput0<bool>();
-              bool input1 = per_iter_bh.ScalarInput1<bool>();
-              auto output = per_iter_bh.OutputEigen<bool>();
-              if (input1)
-                output.array() = !input0.array();
-              else
-                output = input0;
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() =
-                  per_iter_bh.EigenInput0<bool>().array() ^ per_iter_bh.EigenInput1<bool>().array();
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        bool input0 = per_iter_bh.ScalarInput0<bool>();
+        auto input1 = per_iter_bh.EigenInput0<bool>();
+        auto output = per_iter_bh.OutputEigen<bool>();
+        if (input0)
+          output.array() = !input1.array();
+        else
+          output = input1;
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto input0 = per_iter_bh.EigenInput0<bool>();
+        bool input1 = per_iter_bh.ScalarInput1<bool>();
+        auto output = per_iter_bh.OutputEigen<bool>();
+        if (input1)
+          output.array() = !input0.array();
+        else
+          output = input0;
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() =
+            per_iter_bh.EigenInput0<bool>().array() ^ per_iter_bh.EigenInput1<bool>().array();
+      }};
 
-  UntypedBroadcastTwo(*context, callback, 1.0);
+  UntypedBroadcastTwo(*context, funcs, 1.0);
   return Status::OK();
 }
 
 template <typename T>
 Status Equal<T>::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() = per_iter_bh.ScalarInput0<T>() == per_iter_bh.EigenInput1<T>().array();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput0<T>().array() == per_iter_bh.ScalarInput1<T>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() =
-                  per_iter_bh.EigenInput0<T>().array() == per_iter_bh.EigenInput1<T>().array();
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() = per_iter_bh.ScalarInput0<T>() == per_iter_bh.EigenInput1<T>().array();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput0<T>().array() == per_iter_bh.ScalarInput1<T>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() =
+            per_iter_bh.EigenInput0<T>().array() == per_iter_bh.EigenInput1<T>().array();
+      }};
 
-  UntypedBroadcastTwo(*context, callback, 1.0);
+  UntypedBroadcastTwo(*context, funcs, 1.0);
   return Status::OK();
 }
 
 template <typename T>
 Status Less<T>::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput1<T>().array() > per_iter_bh.ScalarInput0<T>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput0<T>().array() < per_iter_bh.ScalarInput1<T>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput0<T>().array() < per_iter_bh.EigenInput1<T>().array();
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput1<T>().array() > per_iter_bh.ScalarInput0<T>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput0<T>().array() < per_iter_bh.ScalarInput1<T>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput0<T>().array() < per_iter_bh.EigenInput1<T>().array();
+      }};
 
-  UntypedBroadcastTwo(*context, callback, 1.0);
+  UntypedBroadcastTwo(*context, funcs, 1.0);
   return Status::OK();
 }
 
 template <typename T>
 Status Greater<T>::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput1<T>().array() < per_iter_bh.ScalarInput0<T>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput0<T>().array() > per_iter_bh.ScalarInput1<T>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<bool>() =
-                  per_iter_bh.EigenInput0<T>().array() > per_iter_bh.EigenInput1<T>().array();
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput1<T>().array() < per_iter_bh.ScalarInput0<T>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() = per_iter_bh.EigenInput0<T>().array() > per_iter_bh.ScalarInput1<T>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<bool>() =
+            per_iter_bh.EigenInput0<T>().array() > per_iter_bh.EigenInput1<T>().array();
+      }};
 
-  UntypedBroadcastTwo(*context, callback, 1.0);
+  UntypedBroadcastTwo(*context, funcs, 1.0);
   return Status::OK();
 }
 
@@ -787,31 +738,27 @@ Status Mean_6<float>::Compute(OpKernelContext* ctx) const {
 
 template <>
 Status Mean_8<float>::Compute(OpKernelContext* context) const {
-  const auto allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
+  const auto typed_allocator = [](const TensorAllocator& tensor_allocator, const TensorShape& shape) {
     return tensor_allocator.Allocate<float>(shape);
   };
 
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        // Do a sum exactly the same as in Sum_8
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<float>() =
-                  per_iter_bh.ScalarInput0<float>() + per_iter_bh.EigenInput1<float>().array();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<float>() =
-                  per_iter_bh.EigenInput0<float>().array() + per_iter_bh.ScalarInput1<float>();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              per_iter_bh.OutputEigen<float>() =
-                  per_iter_bh.EigenInput0<float>() + per_iter_bh.EigenInput1<float>();
-            }});
-  };
+  // Do a sum exactly the same as in Sum_8
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<float>() =
+            per_iter_bh.ScalarInput0<float>() + per_iter_bh.EigenInput1<float>().array();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<float>() =
+            per_iter_bh.EigenInput0<float>().array() + per_iter_bh.ScalarInput1<float>();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<float>() =
+            per_iter_bh.EigenInput0<float>() + per_iter_bh.EigenInput1<float>();
+      }};
 
   int input_count = Node().InputArgCount().front();
-  UntypedBroadcastVariadic(input_count, *context, allocator, callback);
+  UntypedBroadcastVariadic(input_count, *context, typed_allocator, funcs);
 
   // Now divide by the input count to get the mean
   EigenMap<float>(*context->Output<Tensor>(0)) *= 1.0f / static_cast<float>(input_count);
@@ -835,72 +782,68 @@ BitShift<T>::BitShift(const OpKernelInfo& info) : OpKernel(info) {
 
 template <typename T>
 Status BitShift<T>::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              bool shift_left = per_iter_bh.GetUserData();
-              const T& input0 = per_iter_bh.ScalarInput0<T>();
-              auto input1 = per_iter_bh.EigenInput1<T>();
-              auto output = per_iter_bh.OutputEigen<T>();
-              int64_t i = 0;
-              if (shift_left) {
-                for (const auto& input : input1.array()) {
-                  output[i++] = input0 << input;
-                }
-              } else {
-                for (const auto& input : input1.array()) {
-                  output[i++] = input0 >> input;
-                }
-              }
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              bool shift_left = per_iter_bh.GetUserData();
-              auto input0 = per_iter_bh.EigenInput0<T>();
-              const T& input1 = per_iter_bh.ScalarInput1<T>();
-              auto output = per_iter_bh.OutputEigen<T>();
-              int64_t i = 0;
-              if (shift_left) {
-                for (const auto& input : input0.array()) {
-                  output[i++] = input << input1;
-                }
-              } else {
-                for (const auto& input : input0.array()) {
-                  output[i++] = input >> input1;
-                }
-              }
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              bool shift_left = per_iter_bh.GetUserData();
-              auto input0 = per_iter_bh.EigenInput0<T>();
-              auto input1 = per_iter_bh.EigenInput1<T>();
-              auto output = per_iter_bh.OutputEigen<T>();
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        bool shift_left = per_iter_bh.GetUserData();
+        const T& input0 = per_iter_bh.ScalarInput0<T>();
+        auto input1 = per_iter_bh.EigenInput1<T>();
+        auto output = per_iter_bh.OutputEigen<T>();
+        int64_t i = 0;
+        if (shift_left) {
+          for (const auto& input : input1.array()) {
+            output[i++] = input0 << input;
+          }
+        } else {
+          for (const auto& input : input1.array()) {
+            output[i++] = input0 >> input;
+          }
+        }
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        bool shift_left = per_iter_bh.GetUserData();
+        auto input0 = per_iter_bh.EigenInput0<T>();
+        const T& input1 = per_iter_bh.ScalarInput1<T>();
+        auto output = per_iter_bh.OutputEigen<T>();
+        int64_t i = 0;
+        if (shift_left) {
+          for (const auto& input : input0.array()) {
+            output[i++] = input << input1;
+          }
+        } else {
+          for (const auto& input : input0.array()) {
+            output[i++] = input >> input1;
+          }
+        }
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        bool shift_left = per_iter_bh.GetUserData();
+        auto input0 = per_iter_bh.EigenInput0<T>();
+        auto input1 = per_iter_bh.EigenInput1<T>();
+        auto output = per_iter_bh.OutputEigen<T>();
 
-              auto cur0 = input0.begin(), end0 = input0.end();
-              auto cur1 = input1.begin(), end1 = input1.end();
-              auto cur_out = output.begin(), end_out = output.end();
-              if (shift_left) {
-                for (; cur0 != end0; ++cur0, ++cur1, ++cur_out) {
-                  *cur_out = *cur0 << *cur1;
-                }
-              } else {
-                for (; cur0 != end0; ++cur0, ++cur1, ++cur_out) {
-                  *cur_out = *cur0 >> *cur1;
-                }
-              }
+        auto cur0 = input0.begin(), end0 = input0.end();
+        auto cur1 = input1.begin(), end1 = input1.end();
+        auto cur_out = output.begin(), end_out = output.end();
+        if (shift_left) {
+          for (; cur0 != end0; ++cur0, ++cur1, ++cur_out) {
+            *cur_out = *cur0 << *cur1;
+          }
+        } else {
+          for (; cur0 != end0; ++cur0, ++cur1, ++cur_out) {
+            *cur_out = *cur0 >> *cur1;
+          }
+        }
 
-              ORT_ENFORCE(cur1 == end1);
-              ORT_ENFORCE(cur_out == end_out);
-            }});
-  };
+        ORT_ENFORCE(cur1 == end1);
+        ORT_ENFORCE(cur_out == end_out);
+      }};
 
   // set void* to value of bool (doesn't need to be address of) so it can be passed through to the lambdas via
   // BroadcastHelper::GetUserData. This is required as we use raw function pointers for the functors to reduce
-  // the binary size.
+  // the binary size, and doing so prevents using any captures in the lambdas.
   void* user_data = reinterpret_cast<void*>(shift_left_);
 
-  UntypedBroadcastTwo(*context, callback, 1.0, user_data);
+  UntypedBroadcastTwo(*context, funcs, 1.0, user_data);
   return Status::OK();
 }
 
@@ -1170,30 +1113,26 @@ ONNX_CPU_OPERATOR_KERNEL(
 
 template <>
 Status PRelu<float>::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              float input0 = per_iter_bh.ScalarInput0<float>();
-              if (input0 > 0)
-                per_iter_bh.OutputEigen<float>().array() = input0;
-              else
-                per_iter_bh.OutputEigen<float>() = input0 * per_iter_bh.EigenInput1<float>().array();
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto input0 = per_iter_bh.EigenInput0<float>();
-              float input1 = per_iter_bh.ScalarInput1<float>();
-              per_iter_bh.OutputEigen<float>() = (input0.array() > 0).select(input0, input0 * input1);
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto input0 = per_iter_bh.EigenInput0<float>();
-              auto input1 = per_iter_bh.EigenInput1<float>();
-              per_iter_bh.OutputEigen<float>() = (input0.array() > 0).select(input0, input0.cwiseProduct(input1));
-            }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        float input0 = per_iter_bh.ScalarInput0<float>();
+        if (input0 > 0)
+          per_iter_bh.OutputEigen<float>().array() = input0;
+        else
+          per_iter_bh.OutputEigen<float>() = input0 * per_iter_bh.EigenInput1<float>().array();
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto input0 = per_iter_bh.EigenInput0<float>();
+        float input1 = per_iter_bh.ScalarInput1<float>();
+        per_iter_bh.OutputEigen<float>() = (input0.array() > 0).select(input0, input0 * input1);
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto input0 = per_iter_bh.EigenInput0<float>();
+        auto input1 = per_iter_bh.EigenInput1<float>();
+        per_iter_bh.OutputEigen<float>() = (input0.array() > 0).select(input0, input0.cwiseProduct(input1));
+      }};
 
-  UntypedBroadcastTwo(*context, callback, 1.0);
+  UntypedBroadcastTwo(*context, funcs, 1.0);
   return Status::OK();
 }
 
@@ -1204,8 +1143,8 @@ ONNX_CPU_OPERATOR_VERSIONED_KERNEL(
     KernelDefBuilder().TypeConstraint("T", DataTypeImpl::GetTensorType<float>()),
     PRelu<float>);
 
-static void ExpandBroadcastLooper(BroadcastHelper& helper, const BroadcastFunctors& functors) {
-  ORT_ENFORCE(!helper.Input1IsTensor(), "ExpandBroadcastLooper requires a single tensor and a shape as input.");
+static void ExpandBroadcastLooper(BroadcastHelper& helper, const ProcessBroadcastSpanFuncs& functors) {
+  ORT_ENFORCE(!helper.Input1IsTensor(), "ExpandBroadcastLooper should only have a shape for the second input.");
 
   if (helper.IsInput0Scalar()) {
     while (helper.NeedMoreOutput()) {
@@ -1225,7 +1164,7 @@ static void ExpandBroadcastLooper(BroadcastHelper& helper, const BroadcastFuncto
 }
 
 // Split out the untyped processing from the type specific work to minimize binary size
-static void UntypedExpand(OpKernelContext& context, void (*op_callback)(BroadcastHelper&)) {
+static void UntypedExpand(OpKernelContext& context, const ProcessBroadcastSpanFuncs& funcs) {
   // Input 1 is a 1-dimensional tensor containing the dimension values to exapnd to
   const auto& shape_data_tensor = *context.Input<Tensor>(1);
   ORT_ENFORCE(shape_data_tensor.Shape().GetDims().size() == 1,
@@ -1240,26 +1179,23 @@ static void UntypedExpand(OpKernelContext& context, void (*op_callback)(Broadcas
                                        *context.Output(0, input_broadcaster.GetOutputShape()));
   BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster);
 
-  op_callback(broadcast_helper);
+  ExpandBroadcastLooper(broadcast_helper, funcs);
 }
 
 template <typename T>
 Status Expand_8<T>::Compute(OpKernelContext* context) const {
-  const auto callback = [](BroadcastHelper& helper) {
-    ExpandBroadcastLooper(
-        helper,
-        {[](BroadcastHelper& per_iter_bh) {
-           per_iter_bh.OutputEigen<T>().array() = per_iter_bh.ScalarInput0<T>();
-         },
-         [](BroadcastHelper&) {
-           ORT_THROW("Invalid usage. Input 1 is a shape with no data.");
-         },
-         [](BroadcastHelper& per_iter_bh) {
-           per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>();
-         }});
-  };
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>().array() = per_iter_bh.ScalarInput0<T>();
+      },
+      [](BroadcastHelper&) {
+        ORT_THROW("Invalid usage. Input 1 is a shape with no data.");
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>();
+      }};
 
-  UntypedExpand(*context, callback);
+  UntypedExpand(*context, funcs);
   return Status::OK();
 }
 
@@ -1340,43 +1276,39 @@ namespace mod_internal {
 
 template <class T>
 void BroadCastFMod(OpKernelContext* context) {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              const T& X = per_iter_bh.ScalarInput0<T>();
-              auto Y = per_iter_bh.SpanInput1<T>();
-              auto output = per_iter_bh.OutputSpan<T>();
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        const T& X = per_iter_bh.ScalarInput0<T>();
+        auto Y = per_iter_bh.SpanInput1<T>();
+        auto output = per_iter_bh.OutputSpan<T>();
 
-              std::transform(Y.cbegin(), Y.cend(), output.begin(),
-                             [X](T y) {
-                               return static_cast<T>(std::fmod(X, y));
-                             });
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto X = per_iter_bh.SpanInput0<T>();
-              const T& Y = per_iter_bh.ScalarInput1<T>();
-              auto output = per_iter_bh.OutputSpan<T>();
+        std::transform(Y.cbegin(), Y.cend(), output.begin(),
+                       [X](T y) {
+                         return static_cast<T>(std::fmod(X, y));
+                       });
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto X = per_iter_bh.SpanInput0<T>();
+        const T& Y = per_iter_bh.ScalarInput1<T>();
+        auto output = per_iter_bh.OutputSpan<T>();
 
-              std::transform(X.cbegin(), X.cend(), output.begin(),
-                             [Y](T x) {
-                               return static_cast<T>(std::fmod(x, Y));
-                             });
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto X = per_iter_bh.SpanInput0<T>();
-              auto Y = per_iter_bh.SpanInput1<T>();
-              auto output = per_iter_bh.OutputSpan<T>();
+        std::transform(X.cbegin(), X.cend(), output.begin(),
+                       [Y](T x) {
+                         return static_cast<T>(std::fmod(x, Y));
+                       });
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto X = per_iter_bh.SpanInput0<T>();
+        auto Y = per_iter_bh.SpanInput1<T>();
+        auto output = per_iter_bh.OutputSpan<T>();
 
-              std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
-                             [](T x, T y) {
-                               return static_cast<T>(std::fmod(x, y));
-                             });
-            }});
-  };
+        std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
+                       [](T x, T y) {
+                         return static_cast<T>(std::fmod(x, y));
+                       });
+      }};
 
-  UntypedBroadcastTwo(*context, callback);
+  UntypedBroadcastTwo(*context, funcs);
 }
 
 template <class T>
@@ -1390,85 +1322,77 @@ inline T Modulus(T x, T y) {
 
 template <class T>
 void BroadCastMod(OpKernelContext* context) {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              const T& X = per_iter_bh.ScalarInput0<T>();
-              auto Y = per_iter_bh.SpanInput1<T>();
-              auto output = per_iter_bh.OutputSpan<T>();
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        const T& X = per_iter_bh.ScalarInput0<T>();
+        auto Y = per_iter_bh.SpanInput1<T>();
+        auto output = per_iter_bh.OutputSpan<T>();
 
-              std::transform(Y.cbegin(), Y.cend(), output.begin(),
-                             [X](T y) {
-                               return Modulus(X, y);
-                             });
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto X = per_iter_bh.SpanInput0<T>();
-              const T& Y = per_iter_bh.ScalarInput1<T>();
-              auto output = per_iter_bh.OutputSpan<T>();
+        std::transform(Y.cbegin(), Y.cend(), output.begin(),
+                       [X](T y) {
+                         return Modulus(X, y);
+                       });
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto X = per_iter_bh.SpanInput0<T>();
+        const T& Y = per_iter_bh.ScalarInput1<T>();
+        auto output = per_iter_bh.OutputSpan<T>();
 
-              std::transform(X.cbegin(), X.cend(), output.begin(),
-                             [Y](T x) {
-                               return Modulus(x, Y);
-                             });
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto X = per_iter_bh.SpanInput0<T>();
-              auto Y = per_iter_bh.SpanInput1<T>();
-              auto output = per_iter_bh.OutputSpan<T>();
+        std::transform(X.cbegin(), X.cend(), output.begin(),
+                       [Y](T x) {
+                         return Modulus(x, Y);
+                       });
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto X = per_iter_bh.SpanInput0<T>();
+        auto Y = per_iter_bh.SpanInput1<T>();
+        auto output = per_iter_bh.OutputSpan<T>();
 
-              std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
-                             [](T x, T y) {
-                               return Modulus(x, y);
-                             });
-            }});
-  };
+        std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
+                       [](T x, T y) {
+                         return Modulus(x, y);
+                       });
+      }};
 
-  UntypedBroadcastTwo(*context, callback);
+  UntypedBroadcastTwo(*context, funcs);
 }
 
 void BroadCastMFloat16FMod(OpKernelContext* context) {
-  const auto callback = [](BroadcastHelper& helper) {
-    BroadcastLooper(
-        helper,
-        BroadcastFunctors{
-            [](BroadcastHelper& per_iter_bh) {
-              const auto X = per_iter_bh.ScalarInput0<MLFloat16>();
-              auto Y = per_iter_bh.SpanInput1<MLFloat16>();
-              auto output = per_iter_bh.OutputSpan<MLFloat16>();
+  ProcessBroadcastSpanFuncs funcs{
+      [](BroadcastHelper& per_iter_bh) {
+        const auto X = per_iter_bh.ScalarInput0<MLFloat16>();
+        auto Y = per_iter_bh.SpanInput1<MLFloat16>();
+        auto output = per_iter_bh.OutputSpan<MLFloat16>();
 
-              std::transform(Y.cbegin(), Y.cend(), output.begin(),
-                             [X_fl = math::halfToFloat(X.val)](const MLFloat16& y) {
-                               return MLFloat16(math::floatToHalf(std::fmod(X_fl, math::halfToFloat(y.val))));
-                             });
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto X = per_iter_bh.SpanInput0<MLFloat16>();
-              const MLFloat16 Y = per_iter_bh.ScalarInput1<MLFloat16>();
-              auto output = per_iter_bh.OutputSpan<MLFloat16>();
+        std::transform(Y.cbegin(), Y.cend(), output.begin(),
+                       [X_fl = math::halfToFloat(X.val)](const MLFloat16& y) {
+                         return MLFloat16(math::floatToHalf(std::fmod(X_fl, math::halfToFloat(y.val))));
+                       });
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto X = per_iter_bh.SpanInput0<MLFloat16>();
+        const MLFloat16 Y = per_iter_bh.ScalarInput1<MLFloat16>();
+        auto output = per_iter_bh.OutputSpan<MLFloat16>();
 
-              std::transform(X.cbegin(), X.cend(), output.begin(),
-                             [Y_fl = math::halfToFloat(Y.val)](const MLFloat16& x) {
-                               return MLFloat16(math::floatToHalf(std::fmod(math::halfToFloat(x.val), Y_fl)));
-                             });
-            },
-            [](BroadcastHelper& per_iter_bh) {
-              auto X = per_iter_bh.SpanInput0<MLFloat16>();
-              auto Y = per_iter_bh.SpanInput1<MLFloat16>();
-              auto output = per_iter_bh.OutputSpan<MLFloat16>();
+        std::transform(X.cbegin(), X.cend(), output.begin(),
+                       [Y_fl = math::halfToFloat(Y.val)](const MLFloat16& x) {
+                         return MLFloat16(math::floatToHalf(std::fmod(math::halfToFloat(x.val), Y_fl)));
+                       });
+      },
+      [](BroadcastHelper& per_iter_bh) {
+        auto X = per_iter_bh.SpanInput0<MLFloat16>();
+        auto Y = per_iter_bh.SpanInput1<MLFloat16>();
+        auto output = per_iter_bh.OutputSpan<MLFloat16>();
 
-              std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
-                             [](const MLFloat16& x, const MLFloat16& y) {
-                               auto x_fl = math::halfToFloat(x.val);
-                               auto y_fl = math::halfToFloat(y.val);
-                               return MLFloat16(math::floatToHalf(std::fmod(x_fl, y_fl)));
-                             });
-            }});
-  };
+        std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
+                       [](const MLFloat16& x, const MLFloat16& y) {
+                         auto x_fl = math::halfToFloat(x.val);
+                         auto y_fl = math::halfToFloat(y.val);
+                         return MLFloat16(math::floatToHalf(std::fmod(x_fl, y_fl)));
+                       });
+      }};
 
-  UntypedBroadcastTwo(*context, callback);
+  UntypedBroadcastTwo(*context, funcs);
 }
 
 // Generic implementation of Mod kernel
@@ -1513,17 +1437,26 @@ Status Mod::Compute(OpKernelContext* context) const {
   return Status::OK();
 }
 
-void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), void* user_data) {
+// Broadcast two inputs with no parallelization.
+//
+// This function is type agnostic, and uses function pointers instead of std::function, to minimize binary size.
+// Type specific logic is plugged in via the functions in ProcessBroadcastSpanFuncs.
+// Optional user_data can be provided, and will be available to the ProcessSpanFunc implementations
+// via BroadcastHelper.GetUserData().
+static void UntypedBroadcastTwo(OpKernelContext& context, const ProcessBroadcastSpanFuncs& funcs, void* user_data) {
   InputBroadcaster input_broadcaster(*context.Input<Tensor>(0), *context.Input<Tensor>(1));
   OutputBroadcaster output_broadcaster(input_broadcaster.GetSpanSize(),
                                        *context.Output(0, input_broadcaster.GetOutputShape()));
   BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster, user_data);
 
-  op_callback(broadcast_helper);
+  BroadcastLooper(broadcast_helper, funcs);
 }
 
-void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), double unit_cost,
-                         void* user_data) {
+// Variant of UntypedBroadcastTwo that will parallelize.
+// Operator usage is the same as the parallelization is opaque to the operator.
+// unit_cost must be a valid cost value.
+static void UntypedBroadcastTwo(OpKernelContext& context, const ProcessBroadcastSpanFuncs& funcs, double unit_cost,
+                                void* user_data) {
   const Tensor& input0_tensor = *context.Input<Tensor>(0);
   const Tensor& input1_tensor = *context.Input<Tensor>(1);
   InputBroadcaster input_broadcaster(input0_tensor, input1_tensor);
@@ -1538,28 +1471,26 @@ void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(Broadcast
     return;
   }
 
-  // TODO: There was an 'if' with no 'else' for span_size != 0, but a span of 0 should have meant
-  // an output size of zero and this is unreachable. Temporary check to validate that the check wasn't needed.
-  assert(span_size != 0);
-
   concurrency::ThreadPool* tp = context.GetOperatorThreadPool();
 
-  if (span_size == output_size) {  // Only one big span for all data, parallelize inside the span
+  if (span_size == output_size) {  // Input data will be processed in a single span, so parallelize within the span
     OutputBroadcaster output_broadcaster(span_size, output_tensor);
     BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster, user_data, tp, unit_cost);
-    op_callback(broadcast_helper);
+    BroadcastLooper(broadcast_helper, funcs);
   } else {
+    // Input data will be processed in multiple spans, so parallelize across spans.
+
     // enforce const on input broadcaster we copy from
     const InputBroadcaster& const_input_broadcaster = input_broadcaster;
 
     concurrency::ThreadPool::TryParallelFor(
         tp, output_size / span_size,
-        TensorOpCost{static_cast<float>(input_broadcaster.Input0ElementSize()) * span_size,
-                     static_cast<float>(output_tensor.DataType()->Size()) * span_size,
+        TensorOpCost{static_cast<float>(input_broadcaster.Input0ElementSize() * span_size),
+                     static_cast<float>(output_tensor.DataType()->Size() * span_size),
                      unit_cost * span_size},
-        [span_size, &const_input_broadcaster, &output_tensor, &op_callback, user_data](std::ptrdiff_t first_span,
-                                                                                       std::ptrdiff_t last_span) {
-          // copy from original and advance
+        [span_size, &const_input_broadcaster, &output_tensor, &funcs, user_data](std::ptrdiff_t first_span,
+                                                                                 std::ptrdiff_t last_span) {
+          // copy original input_broadcaster (which is at start of all input) and advance to this segment
           InputBroadcaster segment_input_broadcaster(const_input_broadcaster);
           segment_input_broadcaster.AdvanceBy(first_span * span_size);
 
@@ -1568,19 +1499,18 @@ void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(Broadcast
                                                        first_span * span_size, last_span * span_size);
 
           BroadcastHelper segment_helper(segment_input_broadcaster, segment_output_broadcaster, user_data);
-          op_callback(segment_helper);
+          BroadcastLooper(segment_helper, funcs);
         });
   }
 }
 
 // allocate_tensor should allocate a tensor of the output type with the given shape
 static void UntypedBroadcastVariadic(int input_count, OpKernelContext& context,
-                                     std::unique_ptr<Tensor> (*allocate_tensor)(const TensorAllocator& allocator,
-                                                                                const TensorShape& shape),
-                                     void (*op_callback)(BroadcastHelper&)) {
+                                     AllocateTensorFunc allocate_tensor,
+                                     const ProcessBroadcastSpanFuncs& funcs) {
   const auto& input0 = *context.Input<Tensor>(0);
 
-  // One item is trivial, just copy across and exit
+  // One item is trivial, just copy and exit
   if (input_count == 1) {
     auto& output = *context.Output(0, input0.Shape());
     CopyCpuTensor(&input0, &output);
@@ -1591,7 +1521,8 @@ static void UntypedBroadcastVariadic(int input_count, OpKernelContext& context,
   std::unique_ptr<Tensor> temp_input;
   std::unique_ptr<Tensor> temp_output;
 
-  // For more than 2 tensors, we sum the first two into a temporary tensor, then sum the next with the temporary tensor
+  // For more than 2 tensors, we combine the the current two inputs into a temporary tensor,
+  // and combine the next input with that
   for (int i = 0; i < input_count - 1; i++) {
     auto& tensor0 = temp_input ? *temp_input : input0;
     auto& tensor1 = *context.Input<Tensor>(i + 1);
@@ -1607,11 +1538,10 @@ static void UntypedBroadcastVariadic(int input_count, OpKernelContext& context,
       p_output = temp_output.get();
     }
 
-    // TBroadcastOutput<TOutput> output(bc.GetSpanSize(), *p_output);
     OutputBroadcaster output_broadcaster(input_broadcaster.GetSpanSize(), *p_output);
     BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster);
 
-    op_callback(broadcast_helper);
+    BroadcastLooper(broadcast_helper, funcs);
 
     temp_input = std::move(temp_output);
   }

@@ -856,13 +856,11 @@ class BroadcastHelper {
   void* user_data_{nullptr};
 };
 
-// type agnostic functions to use in the low level broadcasting to process each span so we don't duplicate
-// the broadcasting/parallelization code by each operator by each type supported by the operator.
-// concrete types are applied within the functions.
-// Raw pointer is significantly cheaper in terms of binary size at the cost of not being able to capture anything.
-// (approx. 450 bytes per std::function usage when no copy is required)
+// type agnostic functions to use in the low level broadcasting to process each span.
+// type specific logic is applied within the functions.
+// Raw function pointer is significantly cheaper in terms of binary size at the cost of no support for captures.
 using ProcessSpanFunc = void (*)(BroadcastHelper&);
-struct BroadcastFunctors {
+struct ProcessBroadcastSpanFuncs {
   ProcessSpanFunc input0scalar;
   ProcessSpanFunc input1scalar;
   ProcessSpanFunc general;
@@ -872,7 +870,7 @@ struct BroadcastFunctors {
 // Parallelize processing of data where all the output is covered by a single span
 //
 template <typename TBroadcastHelper>
-static void ParallelizeSingleSpan(TBroadcastHelper& helper, const BroadcastFunctors& functors) {
+static void ParallelizeSingleSpan(TBroadcastHelper& helper, const ProcessBroadcastSpanFuncs& functors) {
   TensorOpCost cost{static_cast<float>(std::max(helper.Input0ElementSize(), helper.Input1ElementSize())),
                     static_cast<float>(helper.OutputElementSize()),
                     helper.UnitCost()};
@@ -910,7 +908,7 @@ static void ParallelizeSingleSpan(TBroadcastHelper& helper, const BroadcastFunct
 // TBroadcastHelper instance was setup to enable that.
 //
 template <typename TBroadcastHelper>
-void BroadcastLooper(TBroadcastHelper& helper, const BroadcastFunctors& functors) {
+void BroadcastLooper(TBroadcastHelper& helper, const ProcessBroadcastSpanFuncs& functors) {
   ORT_ENFORCE(helper.Input1IsTensor(), "BroadcastLooper requires two tensors as input.");
 
   if (helper.Threadpool() != nullptr && helper.SingleSpanOutput()) {
@@ -934,32 +932,6 @@ void BroadcastLooper(TBroadcastHelper& helper, const BroadcastFunctors& functors
     }
   }
 }
-
-// Broadcasting across two inputs with no parallelization.
-//
-// This function will setup the BroadcastHelper and pass it back to the op_callback. This is to manage the lifetime
-// of the components within BroadcastHelper cleanly.
-// The op_callback should call BroadcastLooper with the appropriate functors.
-// The reason for this setup is to keep the broadcasting logic untyped to minimize binary size.
-// The operator implementation plugs in the specific types in the implementation of the functors only.
-// All other code is untyped so only one version of it is required (vs. using templates for types and/or lambdas
-// which resulting in duplicating the common code for each unique combination of template types used).
-// Optional user_data will be provided to the callback via BroadcastHelper.GetUserData().
-// This is to avoid the cost of std::function.
-//
-// Using a lambda for the op_callback via `const std::function<void(BroadcastHelper&)>&` cost approx 450 bytes all up
-// (RTTI was 300 bytes of that). Whilst that lets the lambda do a capture, the cost is significant vs. passing through
-// the user_data via BroadcastHelper (which is required to use function pointers for the lower level
-// BroadcastFunctors anyway)
-void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), void* user_data = nullptr);
-
-// Variant of UntypedBroadcastTwo that will parallelize.
-// Operator usage is the same as the parallelization is opaque to it.
-// unit_cost must be a valid cost.
-// Optional user_data will be provided to the callback via BroadcastHelper.GetUserData().
-// This is to avoid the cost of std::function.
-void UntypedBroadcastTwo(OpKernelContext& context, void (*op_callback)(BroadcastHelper&), double unit_cost,
-                         void* user_data = nullptr);
 
 struct TensorAllocator {
   TensorAllocator(OpKernelContext& context) {

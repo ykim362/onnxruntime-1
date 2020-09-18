@@ -49,8 +49,8 @@ template <typename T, typename R>
 using EnableIfEigenNotScalar = typename std::enable_if<!std::is_arithmetic<T>::value, R>::type;
 
 template <typename T>
-EnableIfEigenScalar<T, BroadcastFunctors> SelectBroadcastFuncs() {
-  return BroadcastFunctors{
+EnableIfEigenScalar<T, ProcessBroadcastSpanFuncs> SelectBroadcastFuncs() {
+  return ProcessBroadcastSpanFuncs{
       [](BroadcastHelper& per_iter_bh) {
         bool target = per_iter_bh.GetUserData();
         bool condition = per_iter_bh.ScalarInput0<bool>();
@@ -81,8 +81,8 @@ EnableIfEigenScalar<T, BroadcastFunctors> SelectBroadcastFuncs() {
 }
 
 template <typename T>
-EnableIfEigenNotScalar<T, BroadcastFunctors> SelectBroadcastFuncs() {
-  return BroadcastFunctors{
+EnableIfEigenNotScalar<T, ProcessBroadcastSpanFuncs> SelectBroadcastFuncs() {
+  return ProcessBroadcastSpanFuncs{
       [](BroadcastHelper& per_iter_bh) {
         bool target = per_iter_bh.GetUserData();
         bool condition = per_iter_bh.ScalarInput0<bool>();
@@ -116,58 +116,6 @@ EnableIfEigenNotScalar<T, BroadcastFunctors> SelectBroadcastFuncs() {
       }};
 }
 
-//template <typename T>
-//EnableIfEigenScalar<T, void>
-//MergeBroadcastLoop(TBroadcaster<T, T>* merge_broadcaster, TBroadcastOutput<T>* merge_broadcast_output) {
-//  const auto merge_scalar_and_vector = [](EigenVectorMap<T> output,
-//                                          const T& scalar_value, ConstEigenVectorMap<T> vector_value) {
-//    if (scalar_value != T{}) {
-//      output = EigenVectorMap<T>::PlainObject::Constant(vector_value.size(), scalar_value);
-//    } else {
-//      output = vector_value;
-//    }
-//  };
-//
-//  BroadcastLoop(
-//      *merge_broadcaster, *merge_broadcast_output,
-//      [merge_scalar_and_vector](EigenVectorMap<T> output, const T& X_selection, ConstEigenVectorMap<T> Y_selection) {
-//        merge_scalar_and_vector(output, X_selection, Y_selection);
-//      },
-//      [merge_scalar_and_vector](EigenVectorMap<T> output, ConstEigenVectorMap<T> X_selection, const T& Y_selection) {
-//        merge_scalar_and_vector(output, Y_selection, X_selection);
-//      },
-//      [](EigenVectorMap<T> output, ConstEigenVectorMap<T> X_selection, ConstEigenVectorMap<T> Y_selection) {
-//        output = X_selection.binaryExpr(Y_selection, [](T x, T y) -> T {
-//          return x != T{} ? x : y;
-//        });
-//      });
-//}
-//
-//template <typename T>
-//EnableIfEigenNotScalar<T, void>
-//MergeBroadcastLoop(TBroadcaster<T, T>* merge_broadcaster, TBroadcastOutput<T>* merge_broadcast_output) {
-//  const auto merge_scalar_and_vector = [](gsl::span<T> output, const T& scalar_value, gsl::span<const T> vector_value) {
-//    if (!scalar_value.empty()) {
-//      std::fill(output.begin(), output.end(), scalar_value);
-//    } else {
-//      std::copy(vector_value.cbegin(), vector_value.cend(), output.begin());
-//    }
-//  };
-//
-//  BroadcastLoopSpan(
-//      *merge_broadcaster, *merge_broadcast_output,
-//      [merge_scalar_and_vector](gsl::span<T> output, const T& X_selection, gsl::span<const T> Y_selection) {
-//        merge_scalar_and_vector(output, X_selection, Y_selection);
-//      },
-//      [merge_scalar_and_vector](gsl::span<T> output, gsl::span<const T> X_selection, const T& Y_selection) {
-//        merge_scalar_and_vector(output, Y_selection, X_selection);
-//      },
-//      [](gsl::span<T> output, gsl::span<const T> X_selection, gsl::span<const T> Y_selection) {
-//        std::transform(X_selection.cbegin(), X_selection.cend(), Y_selection.cbegin(), output.begin(),
-//                       [](const T& x, const T& y) { return !x.empty() ? x : y; });
-//      });
-//}
-
 template <typename T>
 void MergeScalarAndVector(EigenVectorMap<T> output, const T& scalar_value, ConstEigenVectorMap<T> vector_value) {
   if (scalar_value != T{}) {
@@ -178,8 +126,8 @@ void MergeScalarAndVector(EigenVectorMap<T> output, const T& scalar_value, Const
 };
 
 template <typename T>
-EnableIfEigenScalar<T, BroadcastFunctors> MergeBroadcastFuncs() {
-  return BroadcastFunctors{
+EnableIfEigenScalar<T, ProcessBroadcastSpanFuncs> MergeBroadcastFuncs() {
+  return ProcessBroadcastSpanFuncs{
       [](BroadcastHelper& per_iter_bh) {
         MergeScalarAndVector(per_iter_bh.OutputEigen<T>(),
                              per_iter_bh.ScalarInput0<T>(),  // X selection
@@ -210,8 +158,8 @@ void MergeScalarAndVector(gsl::span<T> output, const T& scalar_value, gsl::span<
 };
 
 template <typename T>
-EnableIfEigenNotScalar<T, BroadcastFunctors> MergeBroadcastFuncs() {
-  return BroadcastFunctors{
+EnableIfEigenNotScalar<T, ProcessBroadcastSpanFuncs> MergeBroadcastFuncs() {
+  return ProcessBroadcastSpanFuncs{
       [](BroadcastHelper& per_iter_bh) {
         MergeScalarAndVector(per_iter_bh.OutputSpan<T>(),
                              per_iter_bh.ScalarInput0<T>(),  // X selection
@@ -236,7 +184,7 @@ using AllocTensorFunc = std::unique_ptr<Tensor> (*)(const TensorAllocator& alloc
 
 static std::unique_ptr<Tensor> UntypedSelect(OpKernelContext& context, bool target,
                                              const TensorAllocator& allocator, AllocTensorFunc allocate_tensor,
-                                             const BroadcastFunctors& functors) {
+                                             const ProcessBroadcastSpanFuncs& functors) {
   const auto& condition = *context.Input<Tensor>(0);
   // select the X input (input 1) for 'true', and Y input (input 2) for 'false'
   const auto& values = *context.Input<Tensor>(target ? 1 : 2);
@@ -256,7 +204,7 @@ static std::unique_ptr<Tensor> UntypedSelect(OpKernelContext& context, bool targ
 
 static void UntypedMerge(OpKernelContext& context,
                          const Tensor& X_selection_tensor, const Tensor& Y_selection_tensor,
-                         const BroadcastFunctors& functors) {
+                         const ProcessBroadcastSpanFuncs& functors) {
   InputBroadcaster merge_broadcaster{X_selection_tensor, Y_selection_tensor};
   Tensor& output = *context.Output(0, merge_broadcaster.GetOutputShape());
 
@@ -276,7 +224,7 @@ Status Where<T>::Compute(OpKernelContext* context) const {
   };
 
   TensorAllocator tensor_allocator{*context};
-  BroadcastFunctors funcs = SelectBroadcastFuncs<T>();
+  ProcessBroadcastSpanFuncs funcs = SelectBroadcastFuncs<T>();
 
   // The current implementation is limited to broadcasting over two tensors at once.
   // So, we first broadcast over condition and X to select the values from X:

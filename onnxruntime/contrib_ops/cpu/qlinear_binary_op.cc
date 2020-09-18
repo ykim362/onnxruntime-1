@@ -50,7 +50,7 @@ struct QLinearBroadcastHelper : public BroadcastHelper {
 };
 
 template <typename T>
-void QLinearImpl(OpKernelContext& context, double unit_cost, const BroadcastFunctors& functors) {
+void QLinearImpl(OpKernelContext& context, double unit_cost, const ProcessBroadcastSpanFuncs& functors) {
   auto tensor_a_scale = context.Input<Tensor>(1);
   auto tensor_a_zero_point = context.Input<Tensor>(2);
   auto tensor_b_scale = context.Input<Tensor>(4);
@@ -95,7 +95,7 @@ void QLinearImpl(OpKernelContext& context, double unit_cost, const BroadcastFunc
 
 template <typename T>
 Status QLinearAdd<T>::Compute(OpKernelContext* context) const {
-  const BroadcastFunctors functors = {
+  const ProcessBroadcastSpanFuncs functors = {
       [](BroadcastHelper& per_iter_bh) {
         QLinearBroadcastHelper& qlbh = static_cast<QLinearBroadcastHelper&>(per_iter_bh);
         const T input0 = per_iter_bh.ScalarInput0<T>();
@@ -142,7 +142,7 @@ Status QLinearAdd<T>::Compute(OpKernelContext* context) const {
 
 template <typename T>
 Status QLinearMul<T>::Compute(OpKernelContext* context) const {
-  const BroadcastFunctors functors = {
+  const ProcessBroadcastSpanFuncs functors = {
       [](BroadcastHelper& per_iter_bh) {
         QLinearBroadcastHelper& qlbh = static_cast<QLinearBroadcastHelper&>(per_iter_bh);
         const T input0 = per_iter_bh.ScalarInput0<T>();
