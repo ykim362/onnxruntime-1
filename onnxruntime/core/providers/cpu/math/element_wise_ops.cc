@@ -309,74 +309,76 @@ Status Div<T>::Compute(OpKernelContext* context) const {
 namespace pow_internal {
 
 template <typename T, typename E>
-void PowImpl(OpKernelContext* context, const Tensor& X, const Tensor& Y) {
-  TBroadcaster<T, E> bc{X, Y};
-  Tensor* const output_tensor = context->Output(0, bc.GetOutputShape());
-  TBroadcastOutput<T> output{bc.GetSpanSize(), *output_tensor};
+void PowImpl(OpKernelContext& context) {
+  const auto callback = [](BroadcastHelper& helper) {
+    BroadcastLooper(
+        helper,
+        BroadcastFunctors{
+            [](BroadcastHelper& per_iter_bh) {
+              const T X = per_iter_bh.ScalarInput0<T>();
+              auto Y = per_iter_bh.SpanInput1<E>();
+              auto output = per_iter_bh.OutputSpan<T>();
 
-  // Scalar base
-  auto input0scalar = [](gsl::span<T> output, T X, gsl::span<const E> Y) {
-    std::transform(Y.cbegin(), Y.cend(), output.begin(),
-                   [X](E y) {
-                     return static_cast<T>(std::pow(X, y));
-                   });
+              std::transform(Y.cbegin(), Y.cend(), output.begin(),
+                             [X](E y) {
+                               return static_cast<T>(std::pow(X, y));
+                             });
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              auto X = per_iter_bh.SpanInput0<T>();
+              const E Y = per_iter_bh.ScalarInput1<E>();
+              auto output = per_iter_bh.OutputSpan<T>();
+
+              // optimize for X^2 and X^3
+              if (Y == 2) {
+                std::transform(X.cbegin(), X.cend(), output.begin(),
+                               [](T x) {
+                                 return static_cast<T>(x * x);
+                               });
+
+              } else if (Y == 3) {
+                std::transform(X.cbegin(), X.cend(), output.begin(),
+                               [](T x) {
+                                 return static_cast<T>(x * x * x);
+                               });
+              } else {
+                std::transform(X.cbegin(), X.cend(), output.begin(),
+                               [Y](T x) {
+                                 return static_cast<T>(std::pow(x, Y));
+                               });
+              }
+            },
+            [](BroadcastHelper& per_iter_bh) {
+              auto X = per_iter_bh.SpanInput0<T>();
+              auto Y = per_iter_bh.SpanInput1<E>();
+              auto output = per_iter_bh.OutputSpan<T>();
+
+              std::transform(X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
+                             [](T x, E y) {
+                               return static_cast<T>(std::pow(x, y));
+                             });
+            }});
   };
 
-  // Scalar exponent switch to possibly available optimizations
-  std::function<void(gsl::span<T>, gsl::span<const T> X, E Y)> input1scalar =
-      [](gsl::span<T> output, gsl::span<const T> X, E Y) {
-        std::transform(X.cbegin(), X.cend(), output.begin(),
-                       [Y](T x) {
-                         return static_cast<T>(std::pow(x, Y));
-                       });
-      };
-
-  if (Y.Shape().Size() == 1) {
-    auto exp = *Y.template Data<E>();
-    if (exp == E{2}) {
-      input1scalar = [](gsl::span<T> output, gsl::span<const T> X, E) {
-        std::transform(X.cbegin(), X.cend(), output.begin(),
-                       [](T x) {
-                         return static_cast<T>(x * x);
-                       });
-      };
-    } else if (exp == E{3}) {
-      input1scalar = [](gsl::span<T> output, gsl::span<const T> X, E) {
-        std::transform(X.cbegin(), X.cend(), output.begin(),
-                       [](T x) {
-                         return static_cast<T>(x * x * x);
-                       });
-      };
-    }
-  }
-
-  auto general = [](gsl::span<T> output, gsl::span<const T> X, gsl::span<const E> Y) {
-    std::transform(
-        X.cbegin(), X.cend(), Y.cbegin(), output.begin(),
-        [](T x, E y) {
-          return static_cast<T>(std::pow(x, y));
-        });
-  };
-
-  BroadcastLoopSpan(bc, output, input0scalar, input1scalar, general);
+  UntypedBroadcastTwo(context, callback, 1.0);
 }
 
 template <typename B>
-Status DispatchOnBase(OpKernelContext* context, const Tensor& X, const Tensor& Y) {
+Status DispatchOnBase(OpKernelContext& context, const Tensor& Y) {
   namespace on = ONNX_NAMESPACE;
   Status s;
   switch (Y.GetElementType()) {
     case on::TensorProto_DataType_INT32:
-      PowImpl<B, int32_t>(context, X, Y);
+      PowImpl<B, int32_t>(context);
       break;
     case on::TensorProto_DataType_INT64:
-      PowImpl<B, int64_t>(context, X, Y);
+      PowImpl<B, int64_t>(context);
       break;
     case on::TensorProto_DataType_FLOAT:
-      PowImpl<B, float>(context, X, Y);
+      PowImpl<B, float>(context);
       break;
     case on::TensorProto_DataType_DOUBLE:
-      PowImpl<B, double>(context, X, Y);
+      PowImpl<B, double>(context);
       break;
     default:
       s = ORT_MAKE_STATUS(ONNXRUNTIME, INVALID_ARGUMENT, "Unsupported Y type: ",
@@ -399,16 +401,16 @@ Pow::Compute(OpKernelContext* context) const {
   // Switch on base type first
   switch (X.GetElementType()) {
     case on::TensorProto_DataType_INT32:
-      s = DispatchOnBase<int32_t>(context, X, Y);
+      s = DispatchOnBase<int32_t>(*context, Y);
       break;
     case on::TensorProto_DataType_INT64:
-      s = DispatchOnBase<int64_t>(context, X, Y);
+      s = DispatchOnBase<int64_t>(*context, Y);
       break;
     case on::TensorProto_DataType_FLOAT:
-      s = DispatchOnBase<float>(context, X, Y);
+      s = DispatchOnBase<float>(*context, Y);
       break;
     case on::TensorProto_DataType_DOUBLE:
-      s = DispatchOnBase<double>(context, X, Y);
+      s = DispatchOnBase<double>(*context, Y);
       break;
     default:
       s = ORT_MAKE_STATUS(ONNXRUNTIME, INVALID_ARGUMENT, "Unsupported X type: ",
