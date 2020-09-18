@@ -1202,55 +1202,62 @@ ONNX_CPU_OPERATOR_VERSIONED_KERNEL(
     KernelDefBuilder().TypeConstraint("T", DataTypeImpl::GetTensorType<float>()),
     PRelu<float>);
 
-// This is a special case version of TBroadcaster just for Expand that only has a shape as the second parameter
-template <typename T>
-struct TBroadcasterExpand {
-  TBroadcasterExpand(const Tensor& input, const std::vector<int64_t>& shape)
-      : input_tensor_(input),
-        broadcaster_(input.Shape().GetDims(), shape) {
+static void ExpandBroadcastLooper(BroadcastHelper& helper, const BroadcastFunctors& functors) {
+  ORT_ENFORCE(!helper.Input1IsTensor(), "ExpandBroadcastLooper requires a single tensor and a shape as input.");
+
+  if (helper.IsInput0Scalar()) {
+    while (helper.NeedMoreOutput()) {
+      functors.input0scalar(helper);
+      helper.Next();
+    }
+    /*
+  } else if (helper.IsInput0Scalar()) {
+    // not possible as we only have one tensor as input
+  */
+  } else {
+    while (helper.NeedMoreOutput()) {
+      functors.general(helper);
+      helper.Next();
+    }
   }
+}
 
-  TensorShape GetOutputShape() const { return TensorShape(broadcaster_.output_shape_); }
-  size_t GetSpanSize() const { return span_size_; }
+// Split out the untyped processing from the type specific work to minimize binary size
+static void UntypedExpand(OpKernelContext& context, void (*op_callback)(BroadcastHelper&)) {
+  // Input 1 is a 1-dimensional tensor containing the dimension values to exapnd to
+  const auto& shape_data_tensor = *context.Input<Tensor>(1);
+  ORT_ENFORCE(shape_data_tensor.Shape().GetDims().size() == 1,
+              "Tensor with shape information must be 1 dimensional.");
 
-  bool IsInput0Scalar() const { return broadcaster_.iterator1_.deltas_.front() == 0; }
+  // Turn the shape tensor data into an actual shape
+  const auto* p_dims = shape_data_tensor.Data<int64_t>();
+  TensorShape shape(std::vector<int64_t>{p_dims, p_dims + shape_data_tensor.Shape().Size()});
 
-  T NextScalar() { return *Next(); }
+  InputBroadcaster input_broadcaster(*context.Input<Tensor>(0), shape);
+  OutputBroadcaster output_broadcaster(input_broadcaster.GetSpanSize(),
+                                       *context.Output(0, input_broadcaster.GetOutputShape()));
+  BroadcastHelper broadcast_helper(input_broadcaster, output_broadcaster);
 
-  ConstEigenVectorMap<T> NextEigen() { return ConstEigenVectorMap<T>(Next(), span_size_); }
-
- private:
-  const T* Next() { return input_ + broadcaster_.iterator1_.AdvanceBy(span_size_); }
-
-  const Tensor& input_tensor_;
-  Broadcaster broadcaster_;
-  size_t span_size_{broadcaster_.GetSpanSize()};
-
-  const T* input_{input_tensor_.template Data<T>()};
-};
+  op_callback(broadcast_helper);
+}
 
 template <typename T>
 Status Expand_8<T>::Compute(OpKernelContext* context) const {
-  auto& tensor_shape = *context->Input<Tensor>(1);
-  ORT_ENFORCE(tensor_shape.Shape().GetDims().size() == 1, "Shape must be 1 dimensional as it's tensor data is a shape");
+  const auto callback = [](BroadcastHelper& helper) {
+    ExpandBroadcastLooper(
+        helper,
+        {[](BroadcastHelper& per_iter_bh) {
+           per_iter_bh.OutputEigen<T>().array() = per_iter_bh.ScalarInput0<T>();
+         },
+         [](BroadcastHelper&) {
+           ORT_THROW("Invalid usage. Input 1 is a shape with no data.");
+         },
+         [](BroadcastHelper& per_iter_bh) {
+           per_iter_bh.OutputEigen<T>() = per_iter_bh.EigenInput0<T>();
+         }});
+  };
 
-  // Turn the shape tensor data into an actual shape
-  const auto* p_shape = tensor_shape.template Data<int64_t>();
-  std::vector<int64_t> shape{p_shape, p_shape + tensor_shape.Shape().Size()};
-
-  TBroadcasterExpand<T> bc(*context->Input<Tensor>(0), shape);
-  TBroadcastOutput<T> output(bc.GetSpanSize(), *context->Output(0, bc.GetOutputShape()));
-
-  // This doesn't use BroadcastLoop since there is no second tensor, just duplicating the first
-  if (bc.IsInput0Scalar()) {
-    // Input0 being a scalar is the only special case here, since we're duplicating a single value
-    while (output)
-      output.NextEigenOutput().array() = bc.NextScalar();
-  } else {
-    // Input1 being a scalar doesn't matter (as there's no actual input1). We're still duplicating Input0 in the same sized chunks
-    while (output)
-      output.NextEigenOutput() = bc.NextEigen();
-  }
+  UntypedExpand(*context, callback);
   return Status::OK();
 }
 
@@ -1547,6 +1554,8 @@ static void ParallelizeSingleSpan(BroadcastHelper& helper, const BroadcastFuncto
 // BroadcastHelper was setup to enable that.
 //
 void BroadcastLooper(BroadcastHelper& helper, const BroadcastFunctors& functors) {
+  ORT_ENFORCE(helper.Input1IsTensor(), "BroadcastLooper requires two tensors as input.");
+
   if (helper.Threadpool() != nullptr && helper.SingleSpanOutput()) {
     ParallelizeSingleSpan(helper, functors);
   } else {

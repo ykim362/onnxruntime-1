@@ -712,7 +712,12 @@ struct TBroadcastOutput {
 struct InputBroadcaster {
   InputBroadcaster(const Tensor& input0, const Tensor& input1)
       : input_tensor0_(input0),
-        input_tensor1_(input1) {
+        input_tensor1_(&input1) {
+  }
+
+  InputBroadcaster(const Tensor& input0, const TensorShape& input1_shape)
+      : input_tensor0_(input0),
+        input_tensor1_shape_(input1_shape) {
   }
 
   void AdvanceBy(size_t offset) {
@@ -723,6 +728,10 @@ struct InputBroadcaster {
 
   TensorShape GetOutputShape() const { return TensorShape(broadcaster_.output_shape_); }
   size_t GetSpanSize() const { return span_size_; }
+
+  // Check whether we have a tensor instance for input 1. Code using this class is required to validate this
+  // before calling any methods that require input 1 to have data.
+  bool Input1IsTensor() const { return input_tensor1_ != nullptr; }
 
   bool IsInput0Scalar() const { return broadcaster_.iterator1_.deltas_.front() == 0; }
   bool IsInput1Scalar() const { return broadcaster_.iterator2_.deltas_.front() == 0; }
@@ -767,13 +776,15 @@ struct InputBroadcaster {
 
  private:
   const Tensor& input_tensor0_;
-  const Tensor& input_tensor1_;
+  // need to support use case where input1 is just the shape for Expand op
+  const Tensor* input_tensor1_{nullptr};
+  const TensorShape& input_tensor1_shape_{input_tensor1_->Shape()};
   const size_t input0_element_size_{input_tensor0_.DataType()->Size()};
-  const size_t input1_element_size_{input_tensor1_.DataType()->Size()};
+  const size_t input1_element_size_{input_tensor1_ ? input_tensor1_->DataType()->Size() : 0};
   const void* input0_bytes_{input_tensor0_.DataRaw()};
-  const void* input1_bytes_{input_tensor1_.DataRaw()};
+  const void* input1_bytes_{input_tensor1_ ? input_tensor1_->DataRaw() : nullptr};
 
-  Broadcaster broadcaster_{input_tensor0_.Shape().GetDims(), input_tensor1_.Shape().GetDims()};
+  Broadcaster broadcaster_{input_tensor0_.Shape().GetDims(), input_tensor1_shape_.GetDims()};
   size_t span_size_{broadcaster_.GetSpanSize()};
 };
 
@@ -857,6 +868,10 @@ class BroadcastHelper {
         output_num_elements_(output_num_elements),
         user_data_(rhs.user_data_) {
   }
+
+  // Check whether we have a tensor instance for input 1. Code using this class is required to validate this
+  // before calling any methods that require input 1 to have data.
+  bool Input1IsTensor() const { return input_broadcaster_.Input1IsTensor(); }
 
   bool IsInput0Scalar() const { return input_broadcaster_.IsInput0Scalar(); }
   bool IsInput1Scalar() const { return input_broadcaster_.IsInput1Scalar(); }
