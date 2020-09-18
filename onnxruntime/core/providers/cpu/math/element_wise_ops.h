@@ -627,88 +627,6 @@ struct Broadcaster {
   std::vector<int64_t> output_shape_;
 };
 
-template <typename T0, typename T1>
-struct TBroadcaster {
-  TBroadcaster(const Tensor& input0, const Tensor& input1)
-      : input_tensor0_(input0),
-        input_tensor1_(input1) {
-  }
-
-  void AdvanceBy(size_t offset) {
-    ORT_ENFORCE(offset % span_size_ == 0, "TBroadcaster can only start at span boundary!");
-    broadcaster_.iterator1_.AdvanceBy(offset);
-    broadcaster_.iterator2_.AdvanceBy(offset);
-  }
-
-  TensorShape GetOutputShape() const { return TensorShape(broadcaster_.output_shape_); }
-  size_t GetSpanSize() const { return span_size_; }
-
-  bool IsInput0Scalar() const { return broadcaster_.iterator1_.deltas_.front() == 0; }
-  bool IsInput1Scalar() const { return broadcaster_.iterator2_.deltas_.front() == 0; }
-
-  const T0& NextScalar0() { return *Next0(); }
-  const T1& NextScalar1() { return *Next1(); }
-
-  gsl::span<const T0> NextSpan0() { return gsl::span<const T0>(Next0(), span_size_); }
-  gsl::span<const T1> NextSpan1() { return gsl::span<const T1>(Next1(), span_size_); }
-
-  ConstEigenVectorMap<T0> NextEigen0() { return ConstEigenVectorMap<T0>(Next0(), span_size_); }
-  ConstEigenVectorMap<T1> NextEigen1() { return ConstEigenVectorMap<T1>(Next1(), span_size_); }
-
- private:
-  const T0* Next0() { return input0_ + broadcaster_.iterator1_.AdvanceBy(span_size_); }
-  const T1* Next1() { return input1_ + broadcaster_.iterator2_.AdvanceBy(span_size_); }
-
-  const Tensor& input_tensor0_;
-  const Tensor& input_tensor1_;
-  Broadcaster broadcaster_{input_tensor0_.Shape().GetDims(), input_tensor1_.Shape().GetDims()};
-  size_t span_size_{broadcaster_.GetSpanSize()};
-
-  const T0* input0_{input_tensor0_.template Data<T0>()};
-  const T1* input1_{input_tensor1_.template Data<T1>()};
-};
-
-template <typename T>
-struct TBroadcastOutput {
-  TBroadcastOutput(size_t span_size, Tensor& tensor, int64_t start_offset = 0, int64_t end_offset = 0)
-      : span_size_(span_size) {
-    int64_t len = tensor.Shape().Size();
-    int64_t real_end = (end_offset <= 0) ? len : end_offset;
-    if (start_offset != 0 || end_offset != 0) {  // Keep original semantic
-      ORT_ENFORCE(start_offset >= 0 && real_end >= 0 && start_offset <= real_end && real_end <= len,
-                  "Invalid start/ending offset [", start_offset, ",", real_end, ") for tensor of length:", len);
-      ORT_ENFORCE(start_offset % span_size == 0 && real_end % span_size == 0,
-                  "Broadcast Output range [", start_offset, ", ", real_end,
-                  ") are not at boundary of span with size:", span_size);
-    }
-    output_ = tensor.template MutableData<T>() + start_offset;
-    output_end_ = tensor.template MutableData<T>() + real_end;
-  }
-
-  operator bool() const {
-    return output_ != output_end_;
-  }
-
-  EigenVectorMap<T> NextEigenOutput() {
-    return EigenVectorMap<T>(NextOutput(), span_size_);
-  }
-
-  gsl::span<T> NextSpanOutput() {
-    return gsl::span<T>(NextOutput(), span_size_);
-  }
-
- private:
-  T* NextOutput() {
-    T* output = output_;
-    output_ += span_size_;
-    return output;
-  }
-
-  T* output_;
-  const T* output_end_;
-  size_t span_size_;
-};
-
 struct InputBroadcaster {
   InputBroadcaster(const Tensor& input0, const Tensor& input1)
       : input_tensor0_(input0),
@@ -854,18 +772,15 @@ class BroadcastHelper {
   }
 
   // ctor for use when we parallelize within a span.
-  BroadcastHelper(const BroadcastHelper& rhs,
-                  size_t input0_offset, size_t input0_num_elements,
-                  size_t input1_offset, size_t input1_num_elements,
-                  size_t output_offset, size_t output_num_elements)
+  BroadcastHelper(const BroadcastHelper& rhs, size_t offset, size_t num_elements)
       : input_broadcaster_(rhs.input_broadcaster_),
         output_broadcaster_(rhs.output_broadcaster_),
-        input0_offset_(input0_offset),
-        input0_num_elements_(input0_num_elements),
-        input1_offset_(input1_offset),
-        input1_num_elements_(input1_num_elements),
-        output_offset_(output_offset),
-        output_num_elements_(output_num_elements),
+        input0_offset_(IsInput0Scalar() ? 0 : offset),
+        input0_num_elements_(IsInput0Scalar() ? 1 : num_elements),
+        input1_offset_(IsInput1Scalar() ? 0 : offset),
+        input1_num_elements_(IsInput1Scalar() ? 1 : num_elements),
+        output_offset_(offset),
+        output_num_elements_(num_elements),
         user_data_(rhs.user_data_) {
   }
 
@@ -933,35 +848,95 @@ class BroadcastHelper {
   size_t input0_offset_{0};
   size_t input0_num_elements_{input_broadcaster_.GetSpanSize()};  // default all to getting one full span
   size_t input1_offset_{0};
-  size_t input1_num_elements_{input0_num_elements_};
+  size_t input1_num_elements_{input_broadcaster_.GetSpanSize()};
   size_t output_offset_{0};
-  size_t output_num_elements_{input0_num_elements_};
+  size_t output_num_elements_{input_broadcaster_.GetSpanSize()};
+
+  // opaque user data that is passed through
   void* user_data_{nullptr};
 };
 
-// functors to use in the low level broadcasting so we don't multiply that code by each operator by each type
-// supported by the operator as would happen if we used lambdas as a template type.
-// TODO: See if we can use Dmitri's Callable class given all the functors take the same argument.
+// type agnostic functions to use in the low level broadcasting to process each span so we don't duplicate
+// the broadcasting/parallelization code by each operator by each type supported by the operator.
+// concrete types are applied within the functions.
 // Raw pointer is significantly cheaper in terms of binary size at the cost of not being able to capture anything.
-// (With 8 ops converted to this setup there was a 40KB saving (435KB -> 395KB) for element_wise_ops.o.
-// For the few use cases where there is a capture we could add an opaque void* to BroadcastHelper for user context
-// so it can be passed through that way.
+// (approx. 450 bytes per std::function usage when no copy is required)
+using ProcessSpanFunc = void (*)(BroadcastHelper&);
 struct BroadcastFunctors {
-  void (*input0scalar)(BroadcastHelper&);
-  void (*input1scalar)(BroadcastHelper&);
-  void (*general)(BroadcastHelper&);
+  ProcessSpanFunc input0scalar;
+  ProcessSpanFunc input1scalar;
+  ProcessSpanFunc general;
 };
 
-//struct BroadcastFunctorsStd {
-//  std::function<void(BroadcastHelper& iter_helper)> input0scalar;
-//  std::function<void(BroadcastHelper& iter_helper)> input1scalar;
-//  std::function<void(BroadcastHelper& iter_helper)> general;
-//};
+//
+// Parallelize processing of data where all the output is covered by a single span
+//
+template <typename TBroadcastHelper>
+static void ParallelizeSingleSpan(TBroadcastHelper& helper, const BroadcastFunctors& functors) {
+  TensorOpCost cost{static_cast<float>(std::max(helper.Input0ElementSize(), helper.Input1ElementSize())),
+                    static_cast<float>(helper.OutputElementSize()),
+                    helper.UnitCost()};
 
-// Helper function to provide the looping logic, calling the appropriate functor for the input
-void BroadcastLooper(BroadcastHelper& helper, const BroadcastFunctors& functors);
+  if (helper.IsInput0Scalar()) {
+    concurrency::ThreadPool::TryParallelFor(
+        helper.Threadpool(), helper.NumOutputElements(), cost,
+        [&helper, &functors](std::ptrdiff_t first, std::ptrdiff_t last) {
+          size_t count = static_cast<size_t>(last - first);
+          TBroadcastHelper segment_helper(helper, first, count);
+          functors.input0scalar(segment_helper);
+        });
+  } else if (helper.IsInput1Scalar()) {
+    concurrency::ThreadPool::TryParallelFor(
+        helper.Threadpool(), helper.NumOutputElements(), cost,
+        [&helper, &functors](std::ptrdiff_t first, std::ptrdiff_t last) {
+          size_t count = static_cast<size_t>(last - first);
+          TBroadcastHelper segment_helper(helper, first, count);
+          functors.input1scalar(segment_helper);
+        });
+
+  } else {
+    concurrency::ThreadPool::TryParallelFor(
+        helper.Threadpool(), helper.NumOutputElements(), cost,
+        [&helper, &functors](std::ptrdiff_t first, std::ptrdiff_t last) {
+          size_t count = static_cast<size_t>(last - first);
+          TBroadcastHelper segment_helper(helper, first, count);
+          functors.general(segment_helper);
+        });
+  }
+}
+
+//
+// Helper to provide the looping logic with optimization for parallelizing within a single span if the
+// TBroadcastHelper instance was setup to enable that.
+//
+template <typename TBroadcastHelper>
+void BroadcastLooper(TBroadcastHelper& helper, const BroadcastFunctors& functors) {
+  ORT_ENFORCE(helper.Input1IsTensor(), "BroadcastLooper requires two tensors as input.");
+
+  if (helper.Threadpool() != nullptr && helper.SingleSpanOutput()) {
+    ParallelizeSingleSpan(helper, functors);
+  } else {
+    if (helper.IsInput0Scalar()) {
+      while (helper.NeedMoreOutput()) {
+        functors.input0scalar(helper);
+        helper.Next();
+      }
+    } else if (helper.IsInput1Scalar()) {
+      while (helper.NeedMoreOutput()) {
+        functors.input1scalar(helper);
+        helper.Next();
+      }
+    } else {
+      while (helper.NeedMoreOutput()) {
+        functors.general(helper);
+        helper.Next();
+      }
+    }
+  }
+}
 
 // Broadcasting across two inputs with no parallelization.
+//
 // This function will setup the BroadcastHelper and pass it back to the op_callback. This is to manage the lifetime
 // of the components within BroadcastHelper cleanly.
 // The op_callback should call BroadcastLooper with the appropriate functors.
@@ -1002,44 +977,4 @@ struct TensorAllocator {
  private:
   AllocatorPtr allocator_;
 };
-
-// Broadcast loop for when using eigen, functions are in this form:
-// Input0Scalar: [](EigenVectorMap<TOutput> output, TInput0 input0, ConstEigenVectorMap<TInput1> input1)
-// Input1Scalar: [](EigenVectorMap<TOutput> output, ConstEigenVectorMap<TInput0> input0, TInput1 input1)
-// General     : [](EigenVectorMap<TOutput> output, ConstEigenVectorMap<TInput0> input0,
-//                  ConstEigenVectorMap<TInput1> input1)
-// Scalar parameters can also be of type const TX&.
-template <typename TBroadcaster, typename Output, typename Input0Scalar, typename Input1Scalar, typename General>
-void BroadcastLoop(TBroadcaster& bc, Output& output, Input0Scalar input0scalar, Input1Scalar input1scalar, General general) {
-  if (bc.IsInput0Scalar()) {
-    while (output)
-      input0scalar(output.NextEigenOutput(), bc.NextScalar0(), bc.NextEigen1());
-  } else if (bc.IsInput1Scalar()) {
-    while (output)
-      input1scalar(output.NextEigenOutput(), bc.NextEigen0(), bc.NextScalar1());
-  } else {
-    while (output)
-      general(output.NextEigenOutput(), bc.NextEigen0(), bc.NextEigen1());
-  }
-}
-
-// Broadcast loop for when using gsl::span<T>, functions are in this form:
-// Input0Scalar: [](gsl::span<TOutput> output, TInput0 input0, gsl::span<const TInput1> input1)
-// Input1Scalar: [](gsl::span<TOutput> output, gsl::span<const TInput0> input0, TInput1 input1)
-// General     : [](gsl::span<TOutput> output, gsl::span<const TInput0> input0, gsl::span<const TInput1> input1)
-// Scalar parameters can also be of type const TX&.
-template <typename TBroadcaster, typename Output, typename Input0Scalar, typename Input1Scalar, typename General>
-void BroadcastLoopSpan(TBroadcaster& bc, Output& output, Input0Scalar input0scalar, Input1Scalar input1scalar, General general) {
-  if (bc.IsInput0Scalar()) {
-    while (output)
-      input0scalar(output.NextSpanOutput(), bc.NextScalar0(), bc.NextSpan1());
-  } else if (bc.IsInput1Scalar()) {
-    while (output)
-      input1scalar(output.NextSpanOutput(), bc.NextSpan0(), bc.NextScalar1());
-  } else {
-    while (output)
-      general(output.NextSpanOutput(), bc.NextSpan0(), bc.NextSpan1());
-  }
-}
-
 }  // namespace onnxruntime
