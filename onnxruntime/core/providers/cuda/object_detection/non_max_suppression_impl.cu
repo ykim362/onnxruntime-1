@@ -301,6 +301,8 @@ Status NmsGpu(cudaStream_t stream,
       d_selected_boxes,    // selection flag
       d_selected_indices,  // selected items
       d_num_selected, num_boxes, stream));
+  // CUDA_RETURN_IF_ERROR(cudaStreamSynchronize(stream))
+  // CUDA_RETURN_IF_ERROR(cudaMemcpy(h_selected_count, d_num_selected, sizeof(int), cudaMemcpyDeviceToHost));
   CUDA_RETURN_IF_ERROR(cudaMemcpyAsync(h_selected_count, d_num_selected, sizeof(int), cudaMemcpyDeviceToHost, stream));
   // cudaStreamSynchronize is needed since the value of h_selected_count will be used by host after this function.
   CUDA_RETURN_IF_ERROR(cudaStreamSynchronize(stream));
@@ -389,6 +391,7 @@ Status NonMaxSuppressionImpl(
   IndexMultiSelect<int, Box><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, stream>>>(num_boxes, d_sorted_indices, original_boxes, sorted_boxes);
   CUDA_RETURN_IF_ERROR(cudaGetLastError());
 
+  CUDA_RETURN_IF_ERROR(cudaStreamSynchronize(stream));
   // STEP 2. filter boxes by scores
   int limited_num_boxes = num_boxes;
   if (pc.score_threshold_ != nullptr) {
@@ -404,7 +407,7 @@ Status NonMaxSuppressionImpl(
       return Status::OK();
     }
   }
-
+  CUDA_RETURN_IF_ERROR(cudaStreamSynchronize(nullptr));
   // STEP 3. launch NMS kernels
   ORT_RETURN_IF_ERROR(NmsGpu(stream,
                              allocator,
