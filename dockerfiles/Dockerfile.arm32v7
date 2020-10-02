@@ -20,17 +20,18 @@ RUN install_packages \
     tar \
     libatlas-base-dev
 
-RUN pip3 install --upgrade pip
+# don't upgrade pip using pip. https://github.com/pypa/pip/issues/5599
+RUN python3 -m pip install --upgrade pip setuptools wheel
 RUN pip3 install --upgrade setuptools
 RUN pip3 install --upgrade wheel
 RUN pip3 install numpy
 
 # Build the latest cmake
 WORKDIR /code
-RUN wget https://github.com/Kitware/CMake/releases/download/v3.14.3/cmake-3.14.3.tar.gz
-RUN tar zxf cmake-3.14.3.tar.gz
+RUN wget https://github.com/Kitware/CMake/releases/download/v3.18.3/cmake-3.18.3.tar.gz
+RUN tar zxf cmake-3.18.3.tar.gz 
 
-WORKDIR /code/cmake-3.14.3
+WORKDIR /code/cmake-3.18.3
 RUN ./configure --system-curl
 RUN make
 RUN sudo make install
@@ -43,15 +44,9 @@ ARG BUILDARGS="--config ${BUILDTYPE} --arm"
 WORKDIR /code
 RUN git clone --single-branch --branch ${ONNXRUNTIME_SERVER_BRANCH} --recursive ${ONNXRUNTIME_REPO} onnxruntime
 
-# Start the basic build
+# Build ORT including the shared lib and python bindings
 WORKDIR /code/onnxruntime
-RUN ./build.sh --use_openmp ${BUILDARGS} --update --build
-
-# Build Shared Library
-RUN ./build.sh --use_openmp ${BUILDARGS} --build_shared_lib
-
-# Build Python Bindings and Wheel
-RUN ./build.sh --use_openmp ${BUILDARGS} --enable_pybind --build_wheel
+RUN ./build.sh --use_openmp ${BUILDARGS} --update --build --build_shared_lib --build_wheel
 
 # Build Output
 RUN ls -l /code/onnxruntime/build/Linux/${BUILDTYPE}/*.so

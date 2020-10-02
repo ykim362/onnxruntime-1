@@ -74,7 +74,7 @@ class Tensor final {
    * Deprecated. The orginal design is this Tensor class won't do any allocation / release.
    * However, this function will allocate the buffer for the shape, and do placement new if p_type is string tensor.
    */
-  Tensor(MLDataType p_type, const TensorShape& shape, std::shared_ptr<IAllocator> allocator, ptrdiff_t offset = 0);
+  Tensor(MLDataType p_type, const TensorShape& shape, std::shared_ptr<IAllocator> allocator);
 
   ~Tensor();
 
