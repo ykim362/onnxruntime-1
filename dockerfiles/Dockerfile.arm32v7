@@ -3,7 +3,8 @@ FROM balenalib/raspberrypi3-python:latest-stretch-build
 ARG ONNXRUNTIME_REPO=https://github.com/Microsoft/onnxruntime
 ARG ONNXRUNTIME_SERVER_BRANCH=master
 
-#Enforces cross-compilation through Quemu
+# Enforces cross-compilation through Qemu. Assuming using qemu-arm-static (32-bit ARM)
+# If using qemu-aarch64-static, set '--arm' to '--arm64' in BUILDARGS below
 RUN [ "cross-build-start" ]
 
 RUN install_packages \
@@ -21,7 +22,7 @@ RUN install_packages \
     libatlas-base-dev
 
 # don't upgrade pip using pip. https://github.com/pypa/pip/issues/5599
-RUN python3 -m pip install --upgrade pip setuptools wheel
+RUN python3 -m pip install --upgrade pip
 RUN pip3 install --upgrade setuptools
 RUN pip3 install --upgrade wheel
 RUN pip3 install numpy
