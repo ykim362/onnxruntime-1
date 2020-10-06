@@ -14,16 +14,19 @@ namespace onnxruntime {
 namespace test {
 template <typename T>
 void CPUTensorTest(std::vector<int64_t> dims, const int offset = 0) {
+  // note: 'offset' is treated as a number of elements so that the alignment is valid on ARM platforms
+
   //not own the buffer
   TensorShape shape(dims);  // this is the shape that will be available starting at offset in the Tensor
   auto alloc = TestCPUExecutionProvider()->GetAllocator(0, OrtMemTypeDefault);
   // alloc extra data as anything before 'offset' is not covered by the shape
   auto num_elements = shape.Size() + offset;
   auto num_bytes = num_elements * sizeof(T);
+  auto offset_bytes = offset * sizeof(T);
   void* data = alloc->Alloc(num_bytes);
   const T* first_element = static_cast<const T*>(data) + offset;
 
-  Tensor t(DataTypeImpl::GetType<T>(), shape, data, alloc->Info(), offset);
+  Tensor t(DataTypeImpl::GetType<T>(), shape, data, alloc->Info(), offset_bytes);
   auto tensor_shape = t.Shape();
   EXPECT_EQ(shape.GetDims(), tensor_shape.GetDims());
   EXPECT_EQ(t.DataType(), DataTypeImpl::GetType<T>());
@@ -36,7 +39,7 @@ void CPUTensorTest(std::vector<int64_t> dims, const int offset = 0) {
   alloc->Free(data);
 
   // test when the Tensor allocates the buffer.
-  // there's no point using an offset here as you'd be allocating extra data prior to the buffer needed 
+  // there's no point using an offset here as you'd be allocating extra data prior to the buffer needed
   // by the Tensor instance.
   if (offset == 0) {
     Tensor new_t(DataTypeImpl::GetType<T>(), shape, alloc);
