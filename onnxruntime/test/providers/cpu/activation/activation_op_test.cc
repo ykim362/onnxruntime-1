@@ -161,7 +161,7 @@ TEST_F(ActivationOpNoInfTest, Softsign) {
       [](float x) {
         auto result = x / (1 + std::abs(x));
 
-#if !defined(__arm__)
+#if defined(__arm__)
         // Softsign uses Eigen inverse(), which on ARM32 results in a different value when x is FLT_MAX or -FLT_MAX
         // 3.40282347e+38 -> 0 with ARM32 inverse() vs something like 2.939e-39#DEN with other platforms.
         //
