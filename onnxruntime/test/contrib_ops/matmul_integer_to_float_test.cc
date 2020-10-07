@@ -28,7 +28,8 @@ void TestMatMulIntegerToFloat(const std::vector<int64_t>& A_dims,
                               const std::string& reference_model,
                               bool is_matrix_b_constant,
                               bool has_zp = true,
-                              bool has_bias = false) {
+                              bool has_bias = false,
+                              std::function<void(OpTester& tester)>* pre_run_delegate = nullptr) {
   // create rand inputs
   RandomValueGenerator random{};
 
@@ -73,6 +74,11 @@ void TestMatMulIntegerToFloat(const std::vector<int64_t>& A_dims,
   }
 
   test.AddReferenceOutputs(reference_model);
+
+  if (pre_run_delegate) {
+    (*pre_run_delegate)(test);
+  }
+
   test.Run();
 }
 
@@ -137,19 +143,30 @@ TEST(MatMulIntegerToFloat, UInt8_bias_test) {
   std::vector<int64_t> B_dims{128, 128};
   std::vector<int64_t> Y_dims{4, 128};
 
+  // need to adjust tolerance on ARM64
+  std::function<void(OpTester&)>* pre_run_delegate = nullptr;
+#if defined(__aarch64__)
+  std::function<void(OpTester&)> update_rel_err = [](OpTester& tester) {
+    tester.SetOutputRelErr("Y", 1e-7f);
+  };
+  pre_run_delegate = &update_rel_err;
+#endif
+
   TestMatMulIntegerToFloat<uint8_t>(A_dims,
                                     B_dims,
                                     "testdata/matmul_integer_to_float_uint8_bias.onnx",
                                     false /*is_matrix_b_constant*/,
                                     false, /*has_zp*/
-                                    true /*has_bias*/);
+                                    true /*has_bias*/,
+                                    pre_run_delegate);
 
   TestMatMulIntegerToFloat<uint8_t>(A_dims,
                                     B_dims,
                                     "testdata/matmul_integer_to_float_uint8_bias.onnx",
                                     true /*is_matrix_b_constant*/,
                                     false, /*has_zp*/
-                                    true /*has_bias*/);
+                                    true /*has_bias*/,
+                                    pre_run_delegate);
 }
 
 }  // namespace test
