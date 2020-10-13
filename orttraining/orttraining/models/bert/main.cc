@@ -536,7 +536,7 @@ void setup_training_params(BertParameters& params) {
   params.model_with_training_graph_path = model_name_base + ORT_TSTR("_bw.onnx");
   params.model_actual_running_graph_path = model_name_base + ORT_TSTR("_bw_running.onnx");
 
-#if defined(USE_NCCL) || defined(USE_HOROVOD)
+#if defined(USE_NCCL) || defined(ORT_USE_MPI)
   if (params.pipeline_parallel_size > 1) {
     auto pipeline_model_name_base = model_name_base + ToPathString(std::to_string(MPIContext::GetInstance().GetWorldRank()));
     params.pipeline_partitioned_model_path = pipeline_model_name_base + ORT_TSTR("_partitioned.onnx");
