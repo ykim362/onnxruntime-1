@@ -214,9 +214,7 @@ void addObjectMethodsForTraining(py::module& m) {
       .def_readwrite("transformer_layer_recompute", &TrainingParameters::transformer_layer_recompute)
       .def_readwrite("number_recompute_layers", &TrainingParameters::number_recompute_layers)
       .def_readwrite("use_adasum", &TrainingParameters::use_adasum)
-      .def_readwrite("perform_fp16_allreduce", &TrainingParameters::perform_fp16_allreduce)
-      .def_readwrite("data_parallel_size", &TrainingParameters::data_parallel_size)
-      .def_readwrite("horizontal_parallel_size", &TrainingParameters::horizontal_parallel_size);
+      .def_readwrite("perform_fp16_allreduce", &TrainingParameters::perform_fp16_allreduce);
 
 #if defined(USE_NCCL)
   m.def("get_mpi_context_local_rank", []() -> int { return MPIContext::GetInstance().GetLocalRank(); });
