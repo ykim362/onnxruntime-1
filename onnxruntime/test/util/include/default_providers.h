@@ -20,5 +20,9 @@ std::unique_ptr<IExecutionProvider> DefaultRknpuExecutionProvider();
 std::unique_ptr<IExecutionProvider> DefaultAclExecutionProvider(bool enable_arena = true);
 std::unique_ptr<IExecutionProvider> DefaultArmNNExecutionProvider(bool enable_arena = true);
 
+// internal test EP
+std::unique_ptr<IExecutionProvider> DefaultInternalTestingExecutionProvider(
+    const std::vector<std::string>& supported_ops);
+
 }  // namespace test
 }  // namespace onnxruntime

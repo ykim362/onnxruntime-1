@@ -87,6 +87,13 @@ if(onnxruntime_USE_ARMNN)
   set(PROVIDERS_ARMNN onnxruntime_providers_armnn)
   list(APPEND ONNXRUNTIME_PROVIDER_NAMES armnn)
 endif()
+
+# internal testing only
+if(onnxruntime_USE_INTERNAL_TESTING_EP)
+  set(PROVIDERS_INTERNAL_TESTING onnxruntime_providers_internal_testing)
+  list(APPEND ONNXRUNTIME_PROVIDER_NAMES internal_testing)
+endif()
+
 source_group(TREE ${ONNXRUNTIME_ROOT}/core FILES ${onnxruntime_providers_common_srcs} ${onnxruntime_providers_srcs})
 
 set(onnxruntime_providers_src ${onnxruntime_providers_common_srcs} ${onnxruntime_providers_srcs})
@@ -785,4 +792,22 @@ if (onnxruntime_USE_ARMNN)
   target_include_directories(onnxruntime_providers_armnn PRIVATE ${ONNXRUNTIME_ROOT} ${eigen_INCLUDE_DIRS} ${ARMNN_INCLUDE_DIR})
   install(DIRECTORY ${PROJECT_SOURCE_DIR}/../include/onnxruntime/core/providers/armnn  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/onnxruntime/core/providers)
   set_target_properties(onnxruntime_providers_armnn PROPERTIES LINKER_LANGUAGE CXX)
+endif()
+
+
+if (onnxruntime_USE_INTERNAL_TESTING_EP)
+  add_definitions(-DUSE_INTERNAL_TESTING_EP=1)
+  file(GLOB
+    onnxruntime_providers_internal_testing_ep_srcs CONFIGURE_DEPENDS
+    "${ONNXRUNTIME_ROOT}/core/providers/internal_testing/*.h"
+    "${ONNXRUNTIME_ROOT}/core/providers/internal_testing/*.cc"
+  )
+
+  source_group(TREE ${ONNXRUNTIME_ROOT}/core FILES ${onnxruntime_providers_internal_testing_ep_srcs})
+  add_library(onnxruntime_providers_internal_testing ${onnxruntime_providers_internal_testing_ep_srcs})
+  onnxruntime_add_include_to_target(onnxruntime_providers_internal_testing onnxruntime_common onnxruntime_framework onnx onnx_proto protobuf::libprotobuf flatbuffers)
+  add_dependencies(onnxruntime_providers_internal_testing ${onnxruntime_EXTERNAL_DEPENDENCIES})
+  set_target_properties(onnxruntime_providers_internal_testing PROPERTIES FOLDER "ONNXRuntime")
+  target_include_directories(onnxruntime_providers_internal_testing PRIVATE ${ONNXRUNTIME_ROOT})
+  set_target_properties(onnxruntime_providers_internal_testing PROPERTIES LINKER_LANGUAGE CXX)
 endif()

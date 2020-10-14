@@ -1,70 +1,89 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#include "nnapi_execution_provider.h"
+#include "internal_testing_execution_provider.h"
 
-#include "builders/model_builder.h"
-#include "core/framework/allocatormgr.h"
+// #include "core/framework/allocatormgr.h"
 #include "core/framework/compute_capability.h"
 #include "core/graph/model.h"
 #include "core/session/onnxruntime_cxx_api.h"
 
 namespace onnxruntime {
 
-constexpr const char* NNAPI = "Nnapi";
+constexpr const char* INTERNAL_TESTING_EP = "InternalTestingEP";
 
-NnapiExecutionProvider::NnapiExecutionProvider()
-    : IExecutionProvider{onnxruntime::kNnapiExecutionProvider} {
-  AllocatorCreationInfo device_info(
-      [](int) {
-        return onnxruntime::make_unique<CPUAllocator>(OrtMemoryInfo(NNAPI, OrtAllocatorType::OrtDeviceAllocator));
-      });
+InternalTestingExecutionProvider::InternalTestingExecutionProvider(const std::vector<std::string>& ops)
+    : IExecutionProvider{onnxruntime::kInternalTestingExecutionProvider},
+      ops_{ops.begin(), ops.end()} {
+  // Testing if we can just use the default CPU EP Allocator without adding anything here
+  // AllocatorCreationInfo device_info(
+  //     [](int) {
+  //       return onnxruntime::make_unique<CPUAllocator>(OrtMemoryInfo(INTERNAL_TEST_EP, OrtAllocatorType::OrtDeviceAllocator));
+  //     });
 
-  InsertAllocator(CreateAllocator(device_info));
+  // InsertAllocator(CreateAllocator(device_info));
 
-  AllocatorCreationInfo cpu_memory_info(
-      [](int) {
-        return onnxruntime::make_unique<CPUAllocator>(
-            OrtMemoryInfo(NNAPI, OrtAllocatorType::OrtDeviceAllocator, OrtDevice(), 0, OrtMemTypeCPUOutput));
-      });
+  // AllocatorCreationInfo cpu_memory_info(
+  //     [](int) {
+  //       return onnxruntime::make_unique<CPUAllocator>(
+  //           OrtMemoryInfo(INTERNAL_TEST_EP, OrtAllocatorType::OrtDeviceAllocator, OrtDevice(), 0, OrtMemTypeCPUOutput));
+  //     });
 
-  InsertAllocator(CreateAllocator(cpu_memory_info));
+  // InsertAllocator(CreateAllocator(cpu_memory_info));
 }
 
-NnapiExecutionProvider::~NnapiExecutionProvider() {}
+InternalTestingExecutionProvider::~InternalTestingExecutionProvider() {}
 
 std::vector<std::unique_ptr<ComputeCapability>>
-NnapiExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph_view,
-                                      const std::vector<const KernelRegistry*>& /*kernel_registries*/) const {
+InternalTestingExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph_viewer,
+                                                const std::vector<const KernelRegistry*>& /*kernel_registries*/) const {
   std::vector<std::unique_ptr<ComputeCapability>> result;
 
-  // TODO: Task 812756: NNAPI EP, add support for subgraph (If and Loop operators)
-  if (graph_view.IsSubgraph()) {
-    return result;
-  }
-
   std::unordered_set<std::string> all_node_inputs;
-  for (const auto& node : graph_view.Nodes()) {
+  for (const auto& node : graph_viewer.Nodes()) {
     for (auto* input : node.InputDefs()) {
       all_node_inputs.insert(input->Name());
     }
   }
 
-  nnapi::ModelBuilder builder(graph_view);
-  const auto supported_nodes_vector = builder.GetSupportedNodes();
+  /* 
+  Very basic search for groups of nodes that can be handled by the EP.
+  This doesn't work if you have a scenario like the following where A and C could be handled by the EP
+  but B is between them in the topological sort. 
 
-  // Find inputs, initializers and outputs for each supported subgraph
-  const std::vector<NodeIndex>& node_index = graph_view.GetNodesInTopologicalOrder();
-  const auto& graph_outputs = graph_view.GetOutputs();
-  int counter = 0;
-  for (const auto& group : supported_nodes_vector) {
-    if (group.empty())
-      continue;
+    A  
+    |  B
+    | /   
+    |/
+    C
+    |
+  */
 
-    std::unordered_set<size_t> node_set;
+  const auto& graph_outputs = graph_viewer.GetOutputs();
+
+  std::vector<std::vector<NodeIndex>> node_groups;
+  std::vector<NodeIndex> cur_group;
+  for (NodeIndex node_index : graph_viewer.GetNodesInTopologicalOrder()) {
+    // todo: handle ops with same type in different domains
+    if (ops_.count(graph_viewer.GetNode(node_index)->OpType())) {
+      cur_group.push_back(node_index);
+    } else if (!cur_group.empty()) {
+      node_groups.push_back(std::move(cur_group));
+    }
+  }
+
+  // push any final group
+  if (!cur_group.empty()) {
+    node_groups.push_back(std::move(cur_group));
+  }
+
+  int fused_subgraphs_counter = 0;
+
+  for (const auto& group : node_groups) {
+    std::unordered_set<NodeIndex> node_set;
     node_set.reserve(group.size());
     for (const auto& index : group) {
-      node_set.insert(node_index[index]);
+      node_set.insert(index);
     }
 
     std::unique_ptr<IndexedSubGraph> sub_graph = onnxruntime::make_unique<IndexedSubGraph>();
@@ -75,8 +94,8 @@ NnapiExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph_view
     int output_order = 0;
 
     for (const auto& index : group) {
-      sub_graph->nodes.push_back(node_index[index]);
-      const auto* node = graph_view.GetNode(node_index[index]);
+      sub_graph->nodes.push_back(index);
+      const auto* node = graph_viewer.GetNode(index);
 
       for (const auto* input : node->InputDefs()) {
         const auto it = fused_outputs.find(input);
@@ -132,6 +151,7 @@ NnapiExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph_view
     }
 
     fused_outputs.insert(fused_outputs_to_add.begin(), fused_outputs_to_add.end());
+
     // Sort inputs and outputs by the order they were added
     std::multimap<int, const NodeArg*> inputs, outputs;
 
@@ -149,7 +169,7 @@ NnapiExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph_view
 
     // Assign inputs and outputs to subgraph's meta_def
     auto meta_def = onnxruntime::make_unique<::onnxruntime::IndexedSubGraph::MetaDef>();
-    meta_def->name = "NNAPI_" + std::to_string(counter++);
+    meta_def->name = "InternalTestingEP_" + std::to_string(fused_subgraphs_counter++);
     meta_def->domain = kMSDomain;
 
     for (const auto& input : inputs) {
@@ -160,7 +180,7 @@ NnapiExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph_view
       meta_def->outputs.push_back(output.second->Name());
     }
 
-    // meta_def->status = ONNX_NAMESPACE::EXPERIMENTAL;
+    meta_def->status = ONNX_NAMESPACE::EXPERIMENTAL;
     meta_def->since_version = 1;
     sub_graph->SetMetaDef(std::move(meta_def));
 
@@ -170,48 +190,9 @@ NnapiExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph_view
   return result;
 }
 
-static Status GetOutputBuffer(Ort::CustomOpApi& ort,
-                              OrtKernelContext* context,
-                              const nnapi::Model& model,
-                              const std::string& output_name,
-                              const std::vector<uint32_t>& output_shape,
-                              const android::nn::wrapper::Type output_type,
-                              void** output_buffer) ORT_MUST_USE_RESULT;
-static Status GetOutputBuffer(Ort::CustomOpApi& ort,
-                              OrtKernelContext* context,
-                              const nnapi::Model& model,
-                              const std::string& output_name,
-                              const std::vector<uint32_t>& output_shape,
-                              const android::nn::wrapper::Type output_type,
-                              void** output_buffer) {
-  using namespace android::nn::wrapper;
-  std::vector<int64_t> int64_output_shape(output_shape.begin(),
-                                          output_shape.end());
-  auto output_idx = model.GetMappedOutputIdx(output_name);
-  auto* output_tensor = ort.KernelContext_GetOutput(context, output_idx,
-                                                    int64_output_shape.data(),
-                                                    int64_output_shape.size());
-
-  switch (output_type) {
-    case Type::TENSOR_FLOAT32:
-      *output_buffer = ort.GetTensorMutableData<float>(output_tensor);
-      break;
-    case Type::TENSOR_INT32:
-      *output_buffer = ort.GetTensorMutableData<int32_t>(output_tensor);
-      break;
-    case Type::TENSOR_QUANT8_ASYMM:
-      *output_buffer = ort.GetTensorMutableData<uint8_t>(output_tensor);
-      break;
-    default:
-      return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "Unsupported output type: ", TypeToStr(output_type));
-      break;
-  }
-
-  return Status::OK();
-}
-
-common::Status NnapiExecutionProvider::Compile(const std::vector<onnxruntime::Node*>& fused_nodes,
-                                               std::vector<NodeComputeInfo>& node_compute_funcs) {
+common::Status InternalTestingExecutionProvider::Compile(const std::vector<onnxruntime::Node*>& /*fused_nodes*/,
+                                                         std::vector<NodeComputeInfo>& /*node_compute_funcs*/) {
+  /*
   using namespace android::nn::wrapper;
   for (const auto* fused_node : fused_nodes) {
     // Reconstruct graph proto from fused node's function body
@@ -400,6 +381,7 @@ common::Status NnapiExecutionProvider::Compile(const std::vector<onnxruntime::No
 
     node_compute_funcs.push_back(compute_info);
   }
+  */
   return Status::OK();
-}  // namespace onnxruntime
+}
 }  // namespace onnxruntime
