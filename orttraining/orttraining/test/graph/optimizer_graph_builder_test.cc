@@ -112,7 +112,7 @@ OptimizerBuilderRegistry& GetOptimizerBuilderRegistry() {
 }
 
 int GetOpCount(const std::map<std::string, int>& op_counts, const std::string& op_type) {
-  static std::string ms_domain_prefix{std::string(kMsDomain) + '.'};
+  static std::string ms_domain_prefix{std::string(kMSDomain) + '.'};
 
   std::string key;
   if (op_type != std::string(k_horovod_all_reduce_op_name)) {
