@@ -41,6 +41,10 @@ class FunctionImpl final : public Function {
   std::unique_ptr<ONNX_NAMESPACE::OpSchema> op_schema_;
   onnxruntime::Model body_;
   ONNX_NAMESPACE::FunctionProto onnx_func_proto_;
+
+  // if we're serializing to ORT format we need to keep the original Node instances in case we need to defuse
+  // when executing the model
+  std::vector<std::unique_ptr<Node>> original_nodes_;
 };
 
 }  // namespace onnxruntime

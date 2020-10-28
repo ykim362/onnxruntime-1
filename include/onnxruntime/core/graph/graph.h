@@ -121,7 +121,7 @@ class Node {
 
   /** Gets the Node's Node::Type. */
   Node::Type NodeType() const noexcept { return node_type_; }
-  
+
   /** Gets the opset version that the Node's operator was first defined in.
   @returns Opset version. If -1 the Node's operator has not been set.
   @remarks Prefer over Op()->SinceVersion() as Op() is disabled in a minimal build
@@ -702,6 +702,15 @@ class Graph {
   /** Get a GraphNodes instance that provides const access to all valid Nodes in the Graph. */
   const GraphNodes& Nodes() const noexcept { return iterable_nodes_; }
 
+  /** Get a ConstGraphNodes instance that provides access to a filtered set of valid Nodes in the Graph.
+  @remarks We can't use GraphNodes as that would provide mutable access to the nodes by default, and we can't prevent
+           that by returning a const instance of GraphNodes as we're creating a new instance here due to the filter
+           being something we don't control (i.e. we have to return a new instance so it can't be const).
+  */
+  ConstGraphNodes FilteredNodes(GraphNodes::NodeFilterFunc&& filter_func) const noexcept {
+    return ConstGraphNodes(nodes_, std::move(filter_func));
+  }
+
   /** Gets the maximum NodeIndex value used in the Graph. */
   int MaxNodeIndex() const noexcept { return static_cast<int>(nodes_.size()); }  //assume the casting won't overflow
 
@@ -898,9 +907,13 @@ class Graph {
   Create a single Node that is the result of the a fusion of multiple nodes in this Graph.
   @param sub_graph A IndexSubGraph instance with details of the nodes to fuse.
   @param fused_node_name The name for the new Node.
+  @param save_original_nodes Keep the original nodes when serializing to ORT format so that we can defuse at runtime
+                             if needed. e.g. device model is running on doesn't support all the nodes we originally
+                             fused together.
   @returns Node with fused subgraph.
   */
-  Node& FuseSubGraph(std::unique_ptr<IndexedSubGraph> sub_graph, const std::string& fused_node_name);
+  Node& FuseSubGraph(std::unique_ptr<IndexedSubGraph> sub_graph, const std::string& fused_node_name,
+                     bool save_original_nodes = false);
 
   /**
   Directly insert the nodes in the function Node provided into this Graph.
@@ -1022,6 +1035,11 @@ class Graph {
   common::Status SaveToOrtFormat(flatbuffers::FlatBufferBuilder& builder,
                                  flatbuffers::Offset<onnxruntime::experimental::fbs::Graph>& fbs_graph) const;
 
+  // internal use only. gets Node instances that have been replaced with a fused node
+  const std::vector<std::unique_ptr<Node>>& GetFusedNodes() const {
+    return fused_nodes_;
+  }
+
 #endif  // !defined(ORT_MINIMAL_BUILD)
 
   /** Returns the Node containing the GraphProto for this Graph instance if IsSubgraph is true */
@@ -1029,13 +1047,16 @@ class Graph {
 
   /** Returns true if the name is for a value that is coming from outer scope */
   bool IsOuterScopeValue(const std::string& name) const {
-#if !defined(ORT_MINIMAL_BUILD)
-    return resolve_context_.outer_scope_node_args.find(name) != resolve_context_.outer_scope_node_args.cend();
-#else
-    // we shouldn't have code that calls this in a minimal build
-    ORT_UNUSED_PARAMETER(name);
-    ORT_THROW("Internal error. Outer scope value lookup is not currently supported in a minimal build.");
-#endif
+    bool is_outer_scope = false;
+    if (parent_node_) {
+      const auto& implicit_input_defs = parent_node_->ImplicitInputDefs();
+      is_outer_scope = std::find_if(implicit_input_defs.cbegin(), implicit_input_defs.cend(),
+                                    [&name](const NodeArg* implicit_input) {
+                                      return implicit_input->Name() == name;
+                                    }) != implicit_input_defs.cend();
+    }
+
+    return is_outer_scope;
   }
 
 #if !defined(ORT_MINIMAL_BUILD)
@@ -1240,6 +1261,8 @@ class Graph {
     return results;
   }
 
+  bool RemoveNode(NodeIndex node_index, bool release_node);
+
 #endif  // !defined(ORT_MINIMAL_BUILD)
 
   Node* NodeAtIndexImpl(NodeIndex node_index) const {
@@ -1271,6 +1294,10 @@ class Graph {
   IOnnxRuntimeOpSchemaCollectionPtr schema_registry_;
 
   std::vector<std::unique_ptr<onnxruntime::Function>> function_container_;
+
+  // Node instances that were fused but we are keeping alive in order to be able to serialize to ORT format
+  // to support defusing at runtime.
+  std::vector<std::unique_ptr<Node>> fused_nodes_;
 
 #endif  // !defined(ORT_MINIMAL_BUILD)
 

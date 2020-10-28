@@ -7,6 +7,7 @@
 #endif
 
 #include "core/graph/graph_viewer.h"
+#include "core/graph/indexed_sub_graph.h"
 
 namespace onnxruntime {
 
@@ -39,8 +40,21 @@ struct PriorityNodeCompare {
   }
 };
 
-GraphViewer::GraphViewer(const Graph& graph) {
-  graph_ = &graph;
+GraphViewer::GraphViewer(const Graph& graph)
+    : GraphViewer(graph, nullptr) {
+}
+
+GraphViewer::GraphViewer(const Graph& graph, const IndexedSubGraph& subgraph)
+    : GraphViewer(graph, &subgraph) {
+}
+
+GraphViewer::GraphViewer(const Graph& graph, const IndexedSubGraph* subgraph)
+    : graph_{&graph},
+      subgraph_{subgraph},
+      // we can setup the filter here if needed. subgraph_node_indices_ will have been populate by the time it's used
+      graph_nodes_{graph_->FilteredNodes(
+          subgraph ? [this](NodeIndex idx) { return subgraph_node_indices_.count(idx) == 0; }
+                   : ConstGraphNodes::NodeFilterFunc(nullptr))} {
   std::vector<const Node*> leaf_nodes;
   for (auto& node : graph_->Nodes()) {
     // This is a leaf node (without any output node)
@@ -61,23 +75,73 @@ GraphViewer::GraphViewer(const Graph& graph) {
       },
       NodeCompare());
 
+#if !defined(ORT_MINIMAL_BUILD)
   graph.KahnsTopologicalSort(
       [this](const Node* n) {
         nodes_in_topological_order_with_priority_.push_back(n->Index());
       },
       PriorityNodeCompare());
+#endif
+
+  if (subgraph_) {
+    // create set of node indexes as we need quick lookups and don't care about the order
+    subgraph_node_indices_ = std::move(std::unordered_set<NodeIndex>(subgraph->nodes.cbegin(),
+                                                                     subgraph->nodes.cend()));
+
+    // validate. if something is off here it's a bug in our code
+    for (NodeIndex idx : subgraph->nodes) {
+      ORT_ENFORCE(graph_->GetNode(idx) != nullptr, "IndexedSubGraph contains values not present in the Graph");
+    }
+
+    const auto& metadef = subgraph->GetMetaDef();
+
+    subgraph_inputs_.reserve(metadef->inputs.size());
+    subgraph_inputs_including_initializers_.reserve(metadef->inputs.size());
+
+    for (const auto& input : metadef->inputs) {
+      const auto* nodearg = graph.GetNodeArg(input);
+      ORT_ENFORCE(nodearg, "Mismatch between Graph and IndexedSubGraph. Input not found:", input);
+      subgraph_inputs_including_initializers_.push_back(nodearg);
+      if (!graph.IsInitializedTensor(input)) {
+        subgraph_inputs_.push_back(nodearg);
+      }
+    }
+
+    for (const auto& output : metadef->outputs) {
+      const auto* nodearg = graph.GetNodeArg(output);
+      ORT_ENFORCE(nodearg, "Mismatch between Graph and IndexedSubGraph. Output not found:", output);
+      subgraph_outputs_.push_back(nodearg);
+    }
+
+    // filter nodes in topo order to just the nodes in the subgraph
+    auto orig_order = std::move(nodes_in_topological_order_);
+    nodes_in_topological_order_.reserve(subgraph->nodes.size());
+    std::copy_if(orig_order.cbegin(), orig_order.cend(), std::back_inserter(nodes_in_topological_order_),
+                 [this](NodeIndex idx) { return subgraph_node_indices_.count(idx) != 0; });
+
+#if !defined(ORT_MINIMAL_BUILD)
+    auto orig_priority_order = std::move(nodes_in_topological_order_with_priority_);
+    nodes_in_topological_order_with_priority_.reserve(subgraph->nodes.size());
+    std::copy_if(orig_priority_order.cbegin(), orig_priority_order.cend(),
+                 std::back_inserter(nodes_in_topological_order_with_priority_),
+                 [this](NodeIndex idx) { return subgraph_node_indices_.count(idx) != 0; });
+#endif
+  }
 }
 
 // Graph name.
 const std::string& GraphViewer::Name() const noexcept {
-  return graph_->Name();
+  return subgraph_ ? subgraph_->GetMetaDef()->name : graph_->Name();
 }
 
 const std::string& GraphViewer::Description() const noexcept {
-  return graph_->Description();
+  // subgraph doesn't have description so return 'name' instead of nothing
+  // and to disambiguate between the full graph's description
+  return subgraph_ ? subgraph_->GetMetaDef()->name : graph_->Description();
 }
 
-bool GraphViewer::GetInitializedTensor(const std::string& tensor_name, const ONNX_NAMESPACE::TensorProto*& value) const {
+bool GraphViewer::GetInitializedTensor(const std::string& tensor_name,
+                                       const ONNX_NAMESPACE::TensorProto*& value) const {
   return graph_->GetInitializedTensor(tensor_name, value);
 }
 
@@ -87,17 +151,20 @@ bool GraphViewer::CanOverrideInitializer() const noexcept {
 
 // Graph inputs excluding initializers.
 const std::vector<const NodeArg*>& GraphViewer::GetInputs() const noexcept {
-  return graph_->GetInputs();
+  return (subgraph_ == nullptr) ? graph_->GetInputs()
+                                : subgraph_inputs_;
 }
 // Graph inputs including initializers. Contains no nullptr values.
 // This will match the number and order of inputs from the GraphProto.
 const std::vector<const NodeArg*>& GraphViewer::GetInputsIncludingInitializers() const noexcept {
-  return graph_->GetInputsIncludingInitializers();
+  return (subgraph_ == nullptr) ? graph_->GetInputsIncludingInitializers()
+                                : subgraph_inputs_including_initializers_;
 }
 
 // Graph outputs. Should have no nullptr values.
 const std::vector<const NodeArg*>& GraphViewer::GetOutputs() const noexcept {
-  return graph_->GetOutputs();
+  return (subgraph_ == nullptr) ? graph_->GetOutputs()
+                                : subgraph_outputs_;
 }
 
 // Get graph value infos.
@@ -107,15 +174,20 @@ const std::vector<const NodeArg*>& GraphViewer::GetValueInfo() const noexcept {
 
 // Get const Node given specific node index. May return nullptr if node as been freed.
 const Node* GraphViewer::GetNode(NodeIndex node_index) const {
+  if (subgraph_ && subgraph_node_indices_.count(node_index) == 0) {
+    return nullptr;
+  }
+
   return graph_->GetNode(node_index);
 }
 
-const GraphNodes& GraphViewer::Nodes() const noexcept {
-  return graph_->Nodes();
+const ConstGraphNodes& GraphViewer::Nodes() const noexcept {
+  return graph_nodes_;
 }
 
 int GraphViewer::NumberOfNodes() const noexcept {
-  return graph_->NumberOfNodes();
+  return (subgraph_ == nullptr) ? graph_->NumberOfNodes()
+                                : gsl::narrow_cast<int>(subgraph_->nodes.size());
 }
 
 int GraphViewer::MaxNodeIndex() const noexcept {
@@ -126,14 +198,20 @@ const std::vector<NodeIndex>& GraphViewer::GetNodesInTopologicalOrder(ExecutionO
   switch (order) {
     case ExecutionOrder::DEFAULT:
       return nodes_in_topological_order_;
+#if !defined(ORT_MINIMAL_BUILD)
     case ExecutionOrder::PRIORITY_BASED:
       return nodes_in_topological_order_with_priority_;
+#endif
     default:
-      ORT_THROW("Invalide ExecutionOrder");
+      ORT_THROW("Invalid ExecutionOrder");
   }
 }
 
 const std::vector<NodeIndex>& GraphViewer::GetRootNodes() const {
+  // TODO: See if we need to calculate the root_nodes_ of the filtered graph.
+  // GetRootNodes is only used by parallel executor currently, and isn't relevant to the usage of a filtered graph.
+  ORT_ENFORCE(subgraph_ == nullptr, "Not supported with filtered graph.");
+
   return root_nodes_;
 }
 
@@ -146,6 +224,9 @@ const NodeArg* GraphViewer::GetNodeArg(const std::string& name) const {
 }
 
 bool GraphViewer::IsSubgraph() const {
+  // NOTE: GraphViewer::subgraph_ is a collection of nodes within graph_. IsSubgraph reports whether graph_ is a
+  // subgraph of another Graph instance. For now, return the value from graph_ even if GraphViewer::subgraph_ is
+  // filtering the nodes included.
   return graph_->IsSubgraph();
 }
 

@@ -5,6 +5,7 @@
 
 #include "core/graph/graph.h"
 #include "core/framework/session_options.h"
+#include <unordered_set>
 
 namespace onnxruntime {
 class Function;
@@ -30,6 +31,11 @@ class GraphViewer {
   */
   explicit GraphViewer(const Graph& graph);
 
+  /**
+  Construct a GraphViewer from the provided Graph instance, filtering to the nodes specified in the IndexedSubGraph
+  */
+  explicit GraphViewer(const Graph& graph, const IndexedSubGraph& subgraph);
+
   /** Gets the Graph name. */
   const std::string& Name() const noexcept;
 
@@ -51,6 +57,7 @@ class GraphViewer {
   Gets the Graph inputs, excluding initializers.
   @returns Collection of NodeArg pointers for the graph inputs, excluding inputs that have matching initializers.
   @remarks No nullptr values in the returned collection. The order will be the same as in the GraphProto.
+           Filtered to subgraph_ if set.
   */
   const std::vector<const NodeArg*>& GetInputs() const noexcept;
 
@@ -58,6 +65,7 @@ class GraphViewer {
   Gets the Graph inputs, including any initializers.
   @returns Collection of NodeArg pointers for all the graph inputs.
   @remarks No nullptr values in the returned collection. The order will be the same as in the GraphProto.
+           Filtered to subgraph_ if set.
   */
   const std::vector<const NodeArg*>& GetInputsIncludingInitializers() const noexcept;
 
@@ -65,35 +73,46 @@ class GraphViewer {
   Gets the Graph outputs.
   @returns Collection of NodeArg pointers for all the graph outputs.
   @remarks No nullptr values in the returned collection. The order will be the same as in the GraphProto.
+           Filtered to subgraph_ if set.
   */
   const std::vector<const NodeArg*>& GetOutputs() const noexcept;
 
-  /** Gets all ValueInfo NodeArg instances in the Graph. */
+  /** Gets all ValueInfo NodeArg instances in the Graph.
+  @remarks NOT filtered to subgraph_ if set.
+  */
   const std::vector<const NodeArg*>& GetValueInfo() const noexcept;
 
   /**
   Gets the Node instance at the specified index.
   @param node_index Index to retrieve Node from.
-  @remarks May return nullptr if index no longer points to a valid node due to the node being freed.
+  @remarks May return nullptr if index no longer points to a valid node due to the node being freed, of if
+           node is filtered by subgraph_.
   */
   const Node* GetNode(NodeIndex node_index) const;
 
-  /**  Gets an iterator over all the valid Nodes in the Graph. */
-  const GraphNodes& Nodes() const noexcept;
+  /**  Gets an iterator over all the valid Nodes in the Graph.
+  @remarks Filtered to subgraph_ if set.  
+  */
+  const ConstGraphNodes& Nodes() const noexcept;
 
-  /** Gets the number of valid nodes in the Graph. */
+  /** Gets the number of valid nodes in the Graph. 
+  @remarks Filtered to subgraph_ if set.
+  */
   int NumberOfNodes() const noexcept;
 
   /** Gets the maximum NodeIndex value used by Nodes in the Graph. */
   int MaxNodeIndex() const noexcept;
 
-  /** Gets the NodeIndex values for the Graph nodes, sorted into topological order. */
+  /** Gets the NodeIndex values for the Graph nodes, sorted into topological order.  
+  @remarks Filtered to subgraph_ if set.
+  */
   const std::vector<NodeIndex>& GetNodesInTopologicalOrder(ExecutionOrder order = ExecutionOrder::DEFAULT) const;
 
   /**
   Gets the NodeIndex values for the root nodes in the Graph.
   The root nodes are the topmost nodes in the Graph that receive inputs from the Graph inputs
   and no other nodes in the Graph.
+  @remarks Not supported if subgraph_ is set.
   */
   const std::vector<NodeIndex>& GetRootNodes() const;
 
@@ -119,7 +138,8 @@ class GraphViewer {
 
   /**
   returns true if 'name' is an initializer, and is constant and cannot be overridden at runtime.
-  @param check_outer_scope If true and the 'graph_' is a subgraph, check parent graph/s for 'name' if not found in 'graph_'.
+  @param check_outer_scope If true and the 'graph_' is a subgraph, check parent graph/s for 'name' 
+                           if the name is not found in 'graph_'.
   */
   bool IsConstantInitializer(const std::string& name, bool check_outer_scope) const;
 
@@ -140,16 +160,28 @@ class GraphViewer {
 
  private:
   ORT_DISALLOW_COPY_ASSIGNMENT_AND_MOVE(GraphViewer);
+  GraphViewer(const Graph& graph, const IndexedSubGraph* subgraph);
 
   const Graph* graph_;
+  ConstGraphNodes graph_nodes_;
 
   // The NodeIndex values of the graph nodes sorted in topological order.
   std::vector<NodeIndex> nodes_in_topological_order_;
 
+#if !defined(ORT_MINIMAL_BUILD)
   // The NodeIndex values of the graph nodes sorted in topological order with priority.
   std::vector<NodeIndex> nodes_in_topological_order_with_priority_;
+#endif
 
   // Graph root nodes.
   std::vector<NodeIndex> root_nodes_;
+
+  // if we're limiting the view to an IndexedSubGraph we need to create a few pieces of infrastructure that would
+  // usually come from the full graph
+  const IndexedSubGraph* subgraph_{nullptr};
+  std::unordered_set<NodeIndex> subgraph_node_indices_;
+  std::vector<const NodeArg*> subgraph_inputs_;
+  std::vector<const NodeArg*> subgraph_inputs_including_initializers_;
+  std::vector<const NodeArg*> subgraph_outputs_;
 };
 }  // namespace onnxruntime

@@ -1602,7 +1602,7 @@ void Graph::KahnsTopologicalSort(const std::function<void(const Node*)>& enter,
     topo_order.push_back(current->Index());
   }
 
-  if (NumberOfNodes() != static_cast<int>(topo_order.size())) {   
+  if (NumberOfNodes() != static_cast<int>(topo_order.size())) {
     ORT_THROW("Some nodes are not included in the topological sort, graph have a cycle.");
   }
 }
@@ -2881,6 +2881,10 @@ Node& Graph::AddNode(const std::string& name,
 }
 
 bool Graph::RemoveNode(NodeIndex p_index) {
+  return RemoveNode(p_index, true);
+}
+
+bool Graph::RemoveNode(NodeIndex p_index, bool release_node) {
   auto node = GetNode(p_index);
   if (nullptr == node) {
     return false;
@@ -2897,7 +2901,7 @@ bool Graph::RemoveNode(NodeIndex p_index) {
     RemoveEdge(input_edge.GetNode().Index(), p_index, input_edge.GetSrcArgIndex(), input_edge.GetDstArgIndex());
   }
 
-  return ReleaseNode(p_index);
+  return release_node ? ReleaseNode(p_index) : true;
 }
 
 bool Graph::AddControlEdge(NodeIndex src_node_index, NodeIndex dst_node_index) {
@@ -2975,6 +2979,15 @@ void Graph::ToGraphProtoInternal(ONNX_NAMESPACE::GraphProto& graph_proto) const 
   for (auto& node_idx : graph_viewer.GetNodesInTopologicalOrder()) {
     const gsl::not_null<NodeProto*> node_proto{graph_proto.add_node()};
     const gsl::not_null<const Node*> p_node{GetNode(node_idx)};
+
+    // TODO: Figure out how we want to serialize a model with fused nodes that we may need to defuse
+    // Can we just serialize the original nodes and support runtime fusion in a minimal build?
+    // How would we handle the kernel creation? Do we need anything special or just remove the whole OpSchema
+    // side of things given we are just using a lambda to call the setup state/compute/remove state functions.
+    //
+    // Probably need a hybrid approach: Need to identify the subgraphs an EP could take in order to keep optimizers
+    // that run on those nodes to Level1.
+
     // we need to update any GraphProto attributes for subgraphs so that any changes made by things
     // such as the optimizers are captured. otherwise we can end up saving an invalid graph.
     p_node->ToProto(*node_proto, /* update_subgraphs */ true);
@@ -3255,7 +3268,8 @@ IOnnxRuntimeOpSchemaCollectionPtr Graph::GetSchemaRegistry() const {
 }
 
 Node& Graph::FuseSubGraph(std::unique_ptr<::onnxruntime::IndexedSubGraph> sub_graph,
-                          const std::string& fused_node_name) {
+                          const std::string& fused_node_name,
+                          bool save_original_nodes) {
   ORT_ENFORCE(nullptr != sub_graph && nullptr != sub_graph->GetMetaDef());
 
   auto func_meta_def = sub_graph->GetMetaDef();
@@ -3292,8 +3306,15 @@ Node& Graph::FuseSubGraph(std::unique_ptr<::onnxruntime::IndexedSubGraph> sub_gr
     for (auto output_edge : output_edges) {
       RemoveEdge(node->Index(), output_edge.GetNode().Index(), output_edge.GetSrcArgIndex(), output_edge.GetDstArgIndex());
     }
-    RemoveNode(node_index);
+
+    bool release_removed_nodes = save_original_nodes == false;
+    RemoveNode(node_index, release_removed_nodes);
+
+    if (save_original_nodes) {
+      fused_nodes_.push_back(std::move(nodes_[node_index]));
+    }
   }
+
   return fused_node;
 }
 

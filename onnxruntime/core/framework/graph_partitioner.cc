@@ -176,6 +176,7 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
                                                    node_compute_funcs[j].create_state_func,
                                                    node_compute_funcs[j].release_state_func));
       }
+
       for (auto* node : nodes_need_compile) {
         //prepare the func kernel
         KernelDefBuilder builder;
@@ -197,9 +198,9 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
       if (nullptr == node_func) {
         continue;
       }
-      nodes_need_inline.push_back(&node);      
+      nodes_need_inline.push_back(&node);
     }
-  }  
+  }
 
   for (auto* node : nodes_need_inline) {
     // If the node has a functionbody with no kernel and cannot be inlined

@@ -125,8 +125,21 @@ Status SessionState::PopulateKernelCreateInfo(KernelRegistryManager& kernel_regi
   for (auto& node : graph_.Nodes()) {
     const KernelCreateInfo* kci = nullptr;
     ORT_RETURN_IF_ERROR(kernel_registry_manager.SearchKernelRegistry(node, &kci));
-    ORT_IGNORE_RETURN_VALUE(
-        kernel_create_info_map_.insert({node.Index(), gsl::not_null<const KernelCreateInfo*>(kci)}));
+    ORT_IGNORE_RETURN_VALUE(kernel_create_info_map_.insert({node.Index(),
+                                                            gsl::not_null<const KernelCreateInfo*>(kci)}));
+  }
+
+  // we also want to stuff in the KernelCreateInfo for the original nodes that were fused in case we need to defuse
+  for (const auto& node_ptr : graph_.GetFusedNodes()) {
+    // we force any fused nodes to use CPU EP for now. in theory we could run partitioning on the fused subgraphs
+    // in case there was a better option (e.g. NNAPI owns fused nodes, but something like ACL or ARMNN could take
+    // the individual ops). TBD if this would ever happen though as including that many EPs probably means you don't
+    // need the minimal build and could just do a reduced ops build.
+    node_ptr->SetExecutionProviderType(kCpuExecutionProvider);
+    const KernelCreateInfo* kci = nullptr;
+    ORT_RETURN_IF_ERROR(kernel_registry_manager.SearchKernelRegistry(*node_ptr, &kci));
+    ORT_IGNORE_RETURN_VALUE(kernel_create_info_map_.insert({node_ptr->Index(),
+                                                            gsl::not_null<const KernelCreateInfo*>(kci)}));
   }
 
   for (const auto& entry : subgraph_session_states_) {
@@ -149,15 +162,15 @@ const KernelCreateInfo& SessionState::GetNodeKernelCreateInfo(NodeIndex node_ind
 }
 
 Status SessionState::CreateKernels(const KernelRegistryManager& kernel_registry_manager) {
-  const GraphNodes& nodes = graph_viewer_->Nodes();
+  const auto& nodes = graph_viewer_->Nodes();
   if (!nodes.empty()) {
     size_t max_nodeid = 0;
-    for (auto& node : graph_viewer_->Nodes()) {
+    for (const auto& node : nodes) {
       max_nodeid = std::max(max_nodeid, node.Index());
     }
     session_kernels_.clear();
     session_kernels_.resize(max_nodeid + 1, nullptr);
-    for (auto& node : graph_viewer_->Nodes()) {
+    for (const auto& node : nodes) {
       // construct and save the kernels
       const KernelCreateInfo& kci = GetNodeKernelCreateInfo(node.Index());
 
@@ -567,8 +580,10 @@ void SessionState::AddSubgraphSessionState(onnxruntime::NodeIndex index, const s
     ORT_ENFORCE(existing_entries.find(attribute_name) == existing_entries.cend(), "Entry exists in node ", index,
                 " for attribute ", attribute_name);
   }
-#ifdef ONNXRUNTIME_ENABLE_INSTRUMENT
+
   session_state->parent_ = this;
+
+#ifdef ONNXRUNTIME_ENABLE_INSTRUMENT
   GenerateGraphId();
 #endif
   subgraph_session_states_[index].insert(std::make_pair(attribute_name, std::move(session_state)));
