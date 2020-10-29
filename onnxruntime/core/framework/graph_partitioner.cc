@@ -41,6 +41,7 @@ NonCudaOps non_cuda;
 using namespace ::onnxruntime::common;
 namespace onnxruntime {
 
+#if !defined(ORT_MINIMAL_BUILD)
 KernelDefBuilder& BuildFusedKernelDef(KernelDefBuilder& builder, const onnxruntime::Node& node) {
   auto schema = node.Op();
   builder.SetName(schema->Name())
@@ -61,10 +62,13 @@ KernelDefBuilder& BuildFusedKernelDef(KernelDefBuilder& builder, const onnxrunti
  * \return Fused node. Return nullptr if there is no fuse
  */
 static Node* PlaceNode(Graph& graph, std::unique_ptr<IndexedSubGraph> capability,
-                       const KernelRegistryManager& kernel_registry_mgr, const std::string& provider_type, int& count) {
+                       const KernelRegistryManager& kernel_registry_mgr, const std::string& provider_type, int& count,
+                       GraphPartitioner::Mode mode) {
   if (nullptr == capability) {
     return nullptr;
   }
+
+  Node* result = nullptr;
 
   if (nullptr == capability->GetMetaDef()) {
     // The <provider> can run a single node in the <graph> if not using meta-defs.
@@ -78,8 +82,9 @@ static Node* PlaceNode(Graph& graph, std::unique_ptr<IndexedSubGraph> capability
     }
   } else {
     // The <provider> can run a fused <sub_graph> in the <graph>.
-    ORT_ENFORCE(nullptr != capability->GetMetaDef());
-    // Check whether any node in the <sub_graph> was already assigned.
+
+    // Check whether any node in the <sub_graph> was already assigned. If so it cannot be stolen as assignment is done
+    // in order of EP priority
     bool sub_graph_available_for_assignment = true;
     for (auto node_index : capability->nodes) {
       auto node = graph.GetNode(node_index);
@@ -90,20 +95,35 @@ static Node* PlaceNode(Graph& graph, std::unique_ptr<IndexedSubGraph> capability
         break;
       }
     }
+
     if (sub_graph_available_for_assignment) {
-      std::ostringstream oss;
-      oss << provider_type << "_" << capability->GetMetaDef()->name << "_" << count++;
-      std::string node_name = oss.str();
-      auto& fused_node = graph.FuseSubGraph(std::move(capability), node_name);
-      fused_node.SetExecutionProviderType(provider_type);
-      // searching in kernel registries, if no kernel registered for the fused_node, use compile approach
-      if (!KernelRegistryManager::HasImplementationOf(kernel_registry_mgr, fused_node, provider_type)) {
-        return &fused_node;
+      if (mode == GraphPartitioner::Mode::kStandard) {
+        std::ostringstream oss;
+        oss << provider_type << "_" << capability->GetMetaDef()->name << "_" << count++;
+        std::string node_name = oss.str();
+        auto& fused_node = graph.FuseSubGraph(std::move(capability), node_name);
+        fused_node.SetExecutionProviderType(provider_type);
+        // searching in kernel registries, if no kernel registered for the fused_node, use compile approach
+        if (!KernelRegistryManager::HasImplementationOf(kernel_registry_mgr, fused_node, provider_type)) {
+          result = &fused_node;
+        }
+      } else {
+        // assign the nodes in the indexed subgraph to the current EP so that level 2+ optimizers will not change them.
+        // This is used when exporting an ORT format model to maintain the original nodes and re-do the fusion
+        // at runtime. The original nodes provide a fallback if fewer nodes can be fused at runtime due to device
+        // capabilities.
+        for (auto node_index : capability->nodes) {
+          auto node = graph.GetNode(node_index);
+          // due to above check for sub_graph_available_for_assignment we know 'node' is valid and unassigned
+          node->SetExecutionProviderType(provider_type);
+        }
       }
     }
   }
-  return nullptr;
+
+  return result;
 }
+#endif  // !defined(ORT_MINIMAL_BUILD)
 
 Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& func_mgr) const {
   // It is a greedy partitioning algorithm per provider preferences user provided when calling ONNX RUNTIME right now.
@@ -120,8 +140,9 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
 
   // handle testing edge case where optimizers or constant lifting results in graph with no nodes.
   // doing it here saves all providers checking for this in GetCapability
-  if (graph.NumberOfNodes() == 0)
+  if (graph.NumberOfNodes() == 0) {
     return Status::OK();
+  }
 
   // recurse into nested graphs first so we partition bottom up.
   for (auto& node : graph.Nodes()) {
@@ -132,102 +153,160 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
     }
   }
 
-  // fused_kernel_registry is preparing the kernels created on the fly for fused sub graph.
-  // It is only visible for current session.
-  std::shared_ptr<KernelRegistry> fused_kernel_registry = std::make_shared<KernelRegistry>();
-  // Partitioning <graph> based on provider preference and their capabilities.
   GraphViewer graph_viewer(graph);
 
-  // If an execution provider return the capability that he could run a sub-graph,
-  // onnxruntime will fuse the sub-graph into a function node. if the execution provider
-  // says he need to compile the graph at runtime (by need_compile flag),
-  // onnxruntime will invoke the "Compile" method to get compiled binary.
-  // There are two mode of compile, one is return the entry point to the compiled binary
-  // directly, another is export the compiled binary to shared library for future reuse.
+#if !defined(ORT_MINIMAL_BUILD)
+  if (mode_ == Mode::kStandard || mode_ == Mode::kAssignOnly) {
+    // fused_kernel_registry is preparing the kernels created on the fly for fused sub graph.
+    // It is only visible for current session.
+    std::shared_ptr<KernelRegistry> fused_kernel_registry = std::make_shared<KernelRegistry>();
 
-  // TODO: when the graph contain a function node, and user pass in the dll which could
-  // run the function by SessionOption, we should create a function kernel for it and
-  // delegate the compute to the functions inside the dlls.
-  for (auto& provider : providers_) {
-    int count = 0;
-    std::vector<Node*> nodes_need_compile;
-    std::vector<std::unique_ptr<ComputeCapability>> capabilities =
-        provider->GetCapability(graph_viewer, kernel_registry_mgr_.GetKernelRegistriesByProviderType(provider->Type()));
-    for (auto& capability : capabilities) {
-      Node* n = PlaceNode(graph, std::move(capability->sub_graph), kernel_registry_mgr_, provider->Type(), count);
-      if (n != nullptr) {
-        nodes_need_compile.push_back(n);
+    // Partitioning <graph> based on provider preference and their capabilities.
+    //
+    // If an execution provider return the capability that he could run a sub-graph,
+    // onnxruntime will fuse the sub-graph into a function node. if the execution provider
+    // says it needs to compile the graph at runtime (by returning a MetaDef in ComputeCapability),
+    // onnxruntime will invoke the "Compile" method to get compiled binary.
+    // There are two mode of compile, one is return the entry point to the compiled binary
+    // directly, another is export the compiled binary to shared library for future reuse.
+
+    // TODO: when the graph contain a function node, and user pass in the dll which could
+    // run the function by SessionOption, we should create a function kernel for it and
+    // delegate the compute to the functions inside the dlls.
+    for (auto& provider : providers_) {
+      const std::string& type = provider->Type();
+      int count = 0;
+      std::vector<Node*> nodes_need_compile;
+      std::vector<std::unique_ptr<ComputeCapability>> capabilities =
+          provider->GetCapability(graph_viewer, kernel_registry_mgr_.GetKernelRegistriesByProviderType(type));
+
+      for (auto& capability : capabilities) {
+        Node* n = PlaceNode(graph, std::move(capability->sub_graph), kernel_registry_mgr_, type, count, mode_);
+        if (n != nullptr) {
+          nodes_need_compile.push_back(n);
+        }
+      }
+
+      if (!nodes_need_compile.empty()) {
+        if (export_dll) {
+          std::string dll_path;
+          ORT_RETURN_IF_ERROR(provider->Compile(nodes_need_compile, dll_path));
+          for (auto* node : nodes_need_compile)
+            ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(node->Name(), dll_path));
+        } else {
+          std::vector<NodeComputeInfo> node_compute_funcs;
+          ORT_RETURN_IF_ERROR(provider->Compile(nodes_need_compile, node_compute_funcs));
+          if (node_compute_funcs.size() != nodes_need_compile.size()) {
+            return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, type, " did not return correct number of compiled functions");
+          }
+
+          for (size_t j = 0; j < nodes_need_compile.size(); j++) {
+            ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(nodes_need_compile[j]->Name(), std::move(node_compute_funcs[j])));
+          }
+        }
+
+        for (auto* node : nodes_need_compile) {
+          //prepare the func kernel
+          KernelDefBuilder builder;
+          BuildFusedKernelDef(builder, *node);
+          ORT_RETURN_IF_ERROR(fused_kernel_registry->Register(builder,
+                                                              static_cast<KernelCreatePtrFn>(
+                                                                  [](const OpKernelInfo& info) -> OpKernel* {
+                                                                    return new FunctionKernel(info);
+                                                                  })));
+        }
       }
     }
 
-    if (!nodes_need_compile.empty()) {
-      if (export_dll) {
-        std::string dll_path;
-        ORT_RETURN_IF_ERROR(provider->Compile(nodes_need_compile, dll_path));
-        for (auto* node : nodes_need_compile)
-          ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(node->Name(), dll_path));
-      } else {
-        std::vector<NodeComputeInfo> node_compute_funcs;
-        ORT_RETURN_IF_ERROR(provider->Compile(nodes_need_compile, node_compute_funcs));
-        ORT_ENFORCE(node_compute_funcs.size() == nodes_need_compile.size(),
-                    "Provider doesn't return correct number of compiled functions");
-        for (size_t j = 0; j < nodes_need_compile.size(); j++)
-          ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(nodes_need_compile[j]->Name(), node_compute_funcs[j].compute_func,
-                                                   node_compute_funcs[j].create_state_func,
-                                                   node_compute_funcs[j].release_state_func));
-      }
-
-      for (auto* node : nodes_need_compile) {
-        //prepare the func kernel
-        KernelDefBuilder builder;
-        BuildFusedKernelDef(builder, *node);
-        ORT_RETURN_IF_ERROR(fused_kernel_registry->Register(
-            builder, static_cast<KernelCreatePtrFn>([](const OpKernelInfo& info) -> OpKernel* { return new FunctionKernel(info); })));
-      }
-    }
-  }
-
-  ORT_RETURN_IF_ERROR(graph.Resolve());
-
-  // To see if the node with no provider can be inlined. If one such nodes can be
-  // successfully inlined, we re-run the partitioner on the modified graph.
-  std::vector<Node*> nodes_need_inline;
-  for (auto& node : graph.Nodes()) {
-    if (node.GetExecutionProviderType().empty()) {
-      auto node_func = node.GetFunctionBody();
-      if (nullptr == node_func) {
-        continue;
-      }
-      nodes_need_inline.push_back(&node);
-    }
-  }
-
-  for (auto* node : nodes_need_inline) {
-    // If the node has a functionbody with no kernel and cannot be inlined
-    // it is an invalid function
-    ORT_RETURN_IF_ERROR(graph.InlineFunction(*node));
-  }
-
-  // Resolve and rerun graph partition
-  if (!nodes_need_inline.empty()) {
     ORT_RETURN_IF_ERROR(graph.Resolve());
-    ORT_RETURN_IF_ERROR(Partition(graph, export_dll, func_mgr));
-  }
 
-  //For some cases, like fp16 on cpu, right now we don't have any kernel support that.
-  //But we will insert cast op to run the model, so skip the error checking here.
-  //If after graph transform phase, the node still not assigned, we will report error
-  //during kernel creation phase.
+    // To see if the node with no provider can be inlined. If one such nodes can be
+    // successfully inlined, we re-run the partitioner on the modified graph.
+    std::vector<Node*> nodes_need_inline;
+    for (auto& node : graph.Nodes()) {
+      if (node.GetExecutionProviderType().empty()) {
+        auto node_func = node.GetFunctionBody();
+        if (nullptr == node_func) {
+          continue;
+        }
+        nodes_need_inline.push_back(&node);
+      }
+    }
+
+    for (auto* node : nodes_need_inline) {
+      // If the node has a functionbody with no kernel and cannot be inlined
+      // it is an invalid function
+      ORT_RETURN_IF_ERROR(graph.InlineFunction(*node));
+    }
+
+    // Resolve and rerun graph partition
+    if (!nodes_need_inline.empty()) {
+      ORT_RETURN_IF_ERROR(graph.Resolve());
+      ORT_RETURN_IF_ERROR(Partition(graph, export_dll, func_mgr));
+    }
+
+    //For some cases, like fp16 on cpu, right now we don't have any kernel support that.
+    //But we will insert cast op to run the model, so skip the error checking here.
+    //If after graph transform phase, the node still not assigned, we will report error
+    //during kernel creation phase.
 #ifdef COUNT_NON_CUDA_OPS
-  for (auto& node : graph.Nodes()) {
-    if (node.GetExecutionProviderType() != kCudaExecutionProvider &&
-        node.Domain() != kMLDomain &&
-        node.Domain() != kMSDomain)
-      non_cuda.AddOp(node.OpType());
-  }
+    for (auto& node : graph.Nodes()) {
+      if (node.GetExecutionProviderType() != kCudaExecutionProvider &&
+          node.Domain() != kMLDomain &&
+          node.Domain() != kMSDomain)
+        non_cuda.AddOp(node.OpType());
+    }
 #endif
 
-  if (!fused_kernel_registry->IsEmpty()) kernel_registry_mgr_.RegisterKernelRegistry(fused_kernel_registry);
+    if (!fused_kernel_registry->IsEmpty()) {
+      kernel_registry_mgr_.RegisterKernelRegistry(fused_kernel_registry);
+    }
+  } else
+#endif  // !defined(ORT_MINIMAL_BUILD)
+  {
+    assert(mode_ == Mode::kOrtFormatLoad);
+
+    for (auto& provider : providers_) {
+      const std::string& type = provider->Type();
+      if (type == kCpuExecutionProvider) {
+        // hash for kernel is stored in session state for EPs that have pre-registered kernels
+        // (vs. runtime fused kernels) so nothing to do here.
+        continue;
+      }
+
+      std::vector<std::unique_ptr<ComputeCapability>> capabilities =
+          provider->GetCapability(graph_viewer, kernel_registry_mgr_.GetKernelRegistriesByProviderType(type));
+
+      std::vector<GraphViewer> subgraphs_to_fuse;
+
+      for (auto& capability : capabilities) {
+        const IndexedSubGraph& indexed_sub_graph = *capability->sub_graph;
+        const IndexedSubGraph::MetaDef* metadef = indexed_sub_graph.GetMetaDef();
+        if (!metadef) {
+          // this could happen if we enable another non-ORT EP that has statically assigned kernels.
+          // we could add this EP to the skip list above to avoid the unnecessary call to GetCapability
+          continue;
+        }
+
+        // create filtered graph viewer for this set of nodes
+        // TODO: Could save the topological sort in the GraphViewer ctor by adding variant to construct from existing
+        // GraphViewer instance instead of Graph.
+        // Mobile models are expected to be small though so shouldn't be a significant perf cost for now.
+        subgraphs_to_fuse.emplace_back(GraphViewer(graph, indexed_sub_graph));
+      }
+
+      std::vector<NodeComputeInfo> node_compute_funcs;
+      ORT_RETURN_IF_ERROR(provider->Compile(subgraphs_to_fuse, node_compute_funcs));
+
+      if (node_compute_funcs.size() != subgraphs_to_fuse.size()) {
+        return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, type, " did not return correct number of compiled functions");
+      }
+
+      for (size_t j = 0; j < subgraphs_to_fuse.size(); j++) {
+        ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(subgraphs_to_fuse[j].Name(), std::move(node_compute_funcs[j])));
+      }
+    }
+  }
 
   return Status::OK();
 }

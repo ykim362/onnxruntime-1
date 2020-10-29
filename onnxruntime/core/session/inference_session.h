@@ -531,7 +531,8 @@ class InferenceSession {
                                 const onnxruntime::GraphTransformerManager& graph_transformer_mgr,
                                 const ExecutionProviders& providers, KernelRegistryManager& kernel_registry_manager,
                                 const InsertCastTransformer& insert_cast_transformer,
-                                SessionState& session_state) ORT_MUST_USE_RESULT;
+                                SessionState& session_state,
+                                bool saving_model_in_ort_format) ORT_MUST_USE_RESULT;
 
   onnxruntime::GraphTransformerManager graph_transformation_mgr_;
 

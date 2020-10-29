@@ -168,6 +168,9 @@ class IExecutionProvider {
   void InsertAllocator(AllocatorPtr allocator);
   void ReplaceAllocator(AllocatorPtr allocator);
 
+  // creation of a fused node is not supported in a minimal build, so any EP enabled in that scenario must support
+  // compilation via GraphViewer instances.
+#if !defined(ORT_MINIMAL_BUILD)
   /**
   Given a list of fused_node, return create_state/compute/release_state func for each node.
   */
@@ -183,6 +186,17 @@ class IExecutionProvider {
   */
   virtual common::Status Compile(const std::vector<onnxruntime::Node*>& fused_node,
                                  std::string& dll_path);
+
+#endif
+
+  /**
+  Given a list of GraphViewer instances, one for each ComputeCapability, 
+  return create_state/compute/release_state func for each node.
+  @remarks This is an optional interface that is only needed if the execution provider compiles nodes
+           in a scenario involving the minimal build. i.e. on a mobile or embedded device with ORT format model
+  */
+  virtual common::Status Compile(const std::vector<GraphViewer>& subgraphs,
+                                 std::vector<NodeComputeInfo>& node_compute_funcs);
 
   void SetLogger(const logging::Logger* logger) {
     logger_ = logger;

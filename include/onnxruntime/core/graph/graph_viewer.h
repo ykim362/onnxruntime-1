@@ -158,8 +158,10 @@ class GraphViewer {
   }
 #endif
 
+  GraphViewer(GraphViewer&& rhs) = default;
+
  private:
-  ORT_DISALLOW_COPY_ASSIGNMENT_AND_MOVE(GraphViewer);
+  ORT_DISALLOW_COPY_AND_ASSIGNMENT(GraphViewer);
   GraphViewer(const Graph& graph, const IndexedSubGraph* filter_info);
 
   const Graph* graph_;

@@ -51,13 +51,11 @@ InternalTestingExecutionProvider::GetCapability(const onnxruntime::GraphViewer& 
 
   /* 
   Very basic search for groups of nodes that can be handled by the EP.
-  This doesn't work if you have a scenario like the following where A and C could be handled by the EP
-  but B is between them in the topological sort. 
+  This doesn't work perfectly if you have a scenario like the following where A and C could be handled by the EP
+  but B is between them in the topological sort as you'll get two single node capabilities.
 
-    A  
-    |  B
+    A  B
     | /   
-    |/
     C
     |
 
