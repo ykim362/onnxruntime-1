@@ -320,10 +320,7 @@ class Node {
   ADD_ATTR_INTERFACES(std::string)
   ADD_ATTR_INTERFACES(ONNX_NAMESPACE::TensorProto)
   ADD_ATTR_INTERFACES(ONNX_NAMESPACE::GraphProto)
-
-#if !defined(ORT_MINIMAL_BUILD)
   ADD_ATTR_INTERFACES(ONNX_NAMESPACE::SparseTensorProto)
-#endif
 
   /** Gets the Node's attributes. */
   const NodeAttributes& GetAttributes() const noexcept { return attributes_; }
@@ -907,13 +904,9 @@ class Graph {
   Create a single Node that is the result of the a fusion of multiple nodes in this Graph.
   @param sub_graph A IndexSubGraph instance with details of the nodes to fuse.
   @param fused_node_name The name for the new Node.
-  @param save_original_nodes Keep the original nodes when serializing to ORT format so that we can defuse at runtime
-                             if needed. e.g. device model is running on doesn't support all the nodes we originally
-                             fused together.
   @returns Node with fused subgraph.
   */
-  Node& FuseSubGraph(std::unique_ptr<IndexedSubGraph> sub_graph, const std::string& fused_node_name,
-                     bool save_original_nodes = false);
+  Node& FuseSubGraph(std::unique_ptr<IndexedSubGraph> sub_graph, const std::string& fused_node_name);
 
   /**
   Directly insert the nodes in the function Node provided into this Graph.
@@ -1035,11 +1028,6 @@ class Graph {
   common::Status SaveToOrtFormat(flatbuffers::FlatBufferBuilder& builder,
                                  flatbuffers::Offset<onnxruntime::experimental::fbs::Graph>& fbs_graph) const;
 
-  // internal use only. gets Node instances that have been replaced with a fused node
-  const std::vector<std::unique_ptr<Node>>& GetFusedNodes() const {
-    return fused_nodes_;
-  }
-
 #endif  // !defined(ORT_MINIMAL_BUILD)
 
   /** Returns the Node containing the GraphProto for this Graph instance if IsSubgraph is true */
@@ -1047,16 +1035,12 @@ class Graph {
 
   /** Returns true if the name is for a value that is coming from outer scope */
   bool IsOuterScopeValue(const std::string& name) const {
-    bool is_outer_scope = false;
-    if (parent_node_) {
-      const auto& implicit_input_defs = parent_node_->ImplicitInputDefs();
-      is_outer_scope = std::find_if(implicit_input_defs.cbegin(), implicit_input_defs.cend(),
-                                    [&name](const NodeArg* implicit_input) {
-                                      return implicit_input->Name() == name;
-                                    }) != implicit_input_defs.cend();
-    }
-
-    return is_outer_scope;
+    if (!parent_node_) return false;
+    const auto& implicit_input_defs = parent_node_->ImplicitInputDefs();
+    return std::any_of(implicit_input_defs.cbegin(), implicit_input_defs.cend(),
+                       [&name](const NodeArg* implicit_input) {
+                         return implicit_input->Name() == name;
+                       });
   }
 
 #if !defined(ORT_MINIMAL_BUILD)
@@ -1261,8 +1245,6 @@ class Graph {
     return results;
   }
 
-  bool RemoveNode(NodeIndex node_index, bool release_node);
-
 #endif  // !defined(ORT_MINIMAL_BUILD)
 
   Node* NodeAtIndexImpl(NodeIndex node_index) const {
@@ -1289,15 +1271,15 @@ class Graph {
 
   InitializedTensorSet name_to_initial_tensor_;
 
+  std::unordered_set<std::reference_wrapper<const std::string>,
+                     std::hash<std::string>, std::equal_to<std::string>>
+      sparse_tensor_names_;
+
 #if !defined(ORT_MINIMAL_BUILD)
 
   IOnnxRuntimeOpSchemaCollectionPtr schema_registry_;
 
   std::vector<std::unique_ptr<onnxruntime::Function>> function_container_;
-
-  // Node instances that were fused but we are keeping alive in order to be able to serialize to ORT format
-  // to support defusing at runtime.
-  std::vector<std::unique_ptr<Node>> fused_nodes_;
 
 #endif  // !defined(ORT_MINIMAL_BUILD)
 

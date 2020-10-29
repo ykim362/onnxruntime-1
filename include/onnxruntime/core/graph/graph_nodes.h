@@ -147,7 +147,7 @@ class ValidNodes {
    private:
     TIterator current_;
     TIterator end_;
-    bool filter_;
+    bool filter_;                        // store whether filter_func_ is not nullptr and contains a callable
     const NodeFilterFunc* filter_func_;  // store as pointer so iterator is copyable
   };
 
@@ -161,15 +161,13 @@ class ValidNodes {
 /**
 Class that provides iteration over all valid nodes in the Graph.
 */
-//using GraphNodes = ValidNodes<std::vector<std::unique_ptr<Node>>>;
 class GraphNodes : public ValidNodes<std::vector<std::unique_ptr<Node>>> {
  public:
   GraphNodes(std::vector<std::unique_ptr<Node>>& nodes) : ValidNodes(nodes) {
   }
 };
 
-// const variant to enforce const-only access to the items in the container.
-// ValidNodes::NodeIterator will only return a const Node if the container is const.
+// Variant that only ever allows const access to nodes and optionally allows filtering of the nodes.
 class ConstGraphNodes : public ValidNodes<const std::vector<std::unique_ptr<Node>>> {
  public:
   ConstGraphNodes(const std::vector<std::unique_ptr<Node>>& nodes) : ValidNodes(nodes) {
