@@ -15,12 +15,10 @@ class InternalTestingExecutionProvider : public IExecutionProvider {
   GetCapability(const onnxruntime::GraphViewer& graph_view,
                 const std::vector<const KernelRegistry*>& /*kernel_registries*/) const override;
 
-  common::Status Compile(const std::vector<onnxruntime::Node*>& fused_nodes,
+  common::Status Compile(const std::vector<GraphViewer>& subgraphs,
                          std::vector<NodeComputeInfo>& node_compute_funcs) override;
 
  private:
-  // ??? What do we need to track here ???
-  // std::unordered_map<std::string, std::unique_ptr<onnxruntime::nnapi::Model>> nnapi_models_;
   const std::unordered_set<std::string> ops_;
 };
 }  // namespace onnxruntime

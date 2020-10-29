@@ -89,7 +89,7 @@ common::Status IExecutionProvider::Compile(const std::vector<onnxruntime::Node*>
   return common::Status(common::ONNXRUNTIME, common::NOT_IMPLEMENTED);
 }
 
-common::Status IExecutionProvider::Compile(const std::vector<GraphViewer>& /*subgraphs*/,
+common::Status IExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>& /*fused_nodes*/,
                                            std::vector<NodeComputeInfo>& /*node_compute_funcs*/) {
   return common::Status(common::ONNXRUNTIME, common::NOT_IMPLEMENTED);
 }

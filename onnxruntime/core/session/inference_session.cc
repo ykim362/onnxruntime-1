@@ -1149,28 +1149,38 @@ common::Status InferenceSession::Initialize() {
     }
 
 #if !defined(ORT_MINIMAL_BUILD)
-    // add predefined transformers
-    AddPredefinedTransformers(graph_transformation_mgr_, session_options_.graph_optimization_level,
-                              transformers_to_enable_);
+    // internal hook for testing loading of ORT format model in full build that does not use the full partitioning
+    bool skip_transform = !session_options_.GetConfigOrDefault("session.skip_transform", "").empty();
+    if (!skip_transform) {
+      // add predefined transformers
+      AddPredefinedTransformers(graph_transformation_mgr_, session_options_.graph_optimization_level,
+                                transformers_to_enable_);
 
-    // apply any transformations to the main graph and any subgraphs
-    ORT_RETURN_IF_ERROR_SESSIONID_(TransformGraph(graph, graph_transformation_mgr_,
-                                                  execution_providers_, kernel_registry_manager_,
-                                                  insert_cast_transformer_,
-                                                  *session_state_,
-                                                  saving_ort_format));
+      // apply any transformations to the main graph and any subgraphs
+      ORT_RETURN_IF_ERROR_SESSIONID_(TransformGraph(graph, graph_transformation_mgr_,
+                                                    execution_providers_, kernel_registry_manager_,
+                                                    insert_cast_transformer_,
+                                                    *session_state_,
+                                                    saving_ort_format));
 
-    // now that all the transforms are done, call Resolve on the main graph. this will recurse into the subgraphs.
-    ORT_RETURN_IF_ERROR_SESSIONID_(graph.Resolve());
+      // now that all the transforms are done, call Resolve on the main graph. this will recurse into the subgraphs.
+      ORT_RETURN_IF_ERROR_SESSIONID_(graph.Resolve());
 
-    // Update temporary copies of metadata, input- and output definitions to the same state as the resolved graph
-    ORT_RETURN_IF_ERROR_SESSIONID_(SaveModelMetadata(*model_));
-#else
-    GraphPartitioner partitioner(kernel_registry_manager, providers, GraphPartitioner::Mode::kOrtFormatLoad);
-    const bool export_dll = false;  // not currently supported
-    ORT_RETURN_IF_ERROR_SESSIONID_(partitioner.Partition(graph, export_dll, session_state.GetMutableFuncMgr()));
-
+      // Update temporary copies of metadata, input- and output definitions to the same state as the resolved graph
+      ORT_RETURN_IF_ERROR_SESSIONID_(SaveModelMetadata(*model_));
+    } else
 #endif  // !defined(ORT_MINIMAL_BUILD)
+    {
+      // for a minimal build (or testing that behavior) nodes are already partitioned, but a custom EP may compile
+      // some at runtime.
+      // We always have the CPU EP, so only need to run this if some other EP is enabled
+      if (execution_providers_.NumProviders() > 1) {
+        GraphPartitioner partitioner(kernel_registry_manager_, execution_providers_,
+                                     GraphPartitioner::Mode::kOrtFormatLoad);
+        const bool export_dll = false;  // not currently supported
+        ORT_RETURN_IF_ERROR_SESSIONID_(partitioner.Partition(graph, export_dll, session_state_->GetMutableFuncMgr()));
+      }
+    }
 
     auto* serialized_session_state = !ort_format_model_bytes_.empty()
                                          ? fbs::GetInferenceSession(ort_format_model_bytes_.data())->session_state()

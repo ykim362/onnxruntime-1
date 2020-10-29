@@ -158,7 +158,12 @@ class GraphViewer {
   }
 #endif
 
-  GraphViewer(GraphViewer&& rhs) = default;
+  /** Get the filter info that restricts the graph viewer to a subset of nodes if set.
+  @returns Filter info or nullptr
+  */
+  const IndexedSubGraph* GetFilterInfo() const { return filter_info_; }
+
+  GraphViewer(GraphViewer&& rhs) noexcept = default;
 
  private:
   ORT_DISALLOW_COPY_AND_ASSIGNMENT(GraphViewer);

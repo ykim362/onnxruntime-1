@@ -125,21 +125,8 @@ Status SessionState::PopulateKernelCreateInfo(KernelRegistryManager& kernel_regi
   for (auto& node : graph_.Nodes()) {
     const KernelCreateInfo* kci = nullptr;
     ORT_RETURN_IF_ERROR(kernel_registry_manager.SearchKernelRegistry(node, &kci));
-    ORT_IGNORE_RETURN_VALUE(kernel_create_info_map_.insert({node.Index(),
-                                                            gsl::not_null<const KernelCreateInfo*>(kci)}));
-  }
-
-  // we also want to stuff in the KernelCreateInfo for the original nodes that were fused in case we need to defuse
-  for (const auto& node_ptr : graph_.GetFusedNodes()) {
-    // we force any fused nodes to use CPU EP for now. in theory we could run partitioning on the fused subgraphs
-    // in case there was a better option (e.g. NNAPI owns fused nodes, but something like ACL or ARMNN could take
-    // the individual ops). TBD if this would ever happen though as including that many EPs probably means you don't
-    // need the minimal build and could just do a reduced ops build.
-    node_ptr->SetExecutionProviderType(kCpuExecutionProvider);
-    const KernelCreateInfo* kci = nullptr;
-    ORT_RETURN_IF_ERROR(kernel_registry_manager.SearchKernelRegistry(*node_ptr, &kci));
-    ORT_IGNORE_RETURN_VALUE(kernel_create_info_map_.insert({node_ptr->Index(),
-                                                            gsl::not_null<const KernelCreateInfo*>(kci)}));
+    ORT_IGNORE_RETURN_VALUE(
+        kernel_create_info_map_.insert({node.Index(), gsl::not_null<const KernelCreateInfo*>(kci)}));
   }
 
   for (const auto& entry : subgraph_session_states_) {

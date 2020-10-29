@@ -192,38 +192,79 @@ InternalTestingExecutionProvider::GetCapability(const onnxruntime::GraphViewer& 
   return result;
 }
 
-common::Status InternalTestingExecutionProvider::Compile(const std::vector<onnxruntime::Node*>& fused_nodes,
+common::Status InternalTestingExecutionProvider::Compile(const std::vector<GraphViewer>& subgraphs,
                                                          std::vector<NodeComputeInfo>& node_compute_funcs) {
   //
   // We will create a pseudo EP that uses the ORT CPU EP to execute the nodes
   //
 
-  for (const auto* fused_node : fused_nodes) {
-    // Reconstruct graph proto from fused node's function body
-    const Function* func_body = fused_node->GetFunctionBody();
-    if (!func_body) {
-      return common::Status(common::ONNXRUNTIME, common::INVALID_ARGUMENT, "Function body is empty");
+  for (const auto& viewer : subgraphs) {
+    NodeComputeInfo compute_info;
+
+    // TEMP debug output
+    {
+      std::cout << "Fusing nodes: ";
+      for (const auto& node : viewer.Nodes()) {
+        std::cout << " '" << node.Name() << "':" << node.Index();
+      }
+      std::cout << std::endl;
     }
 
-    //const Graph& graph_body = func_body->Body();
-
-    NodeComputeInfo compute_info;
     compute_info.create_state_func = [&](ComputeContext* /*context*/, FunctionState* /*state*/) {
       return 0;
     };
 
-    compute_info.release_state_func = [](FunctionState /*state*/) {
-    };
+    //compute_info.release_state_func = [](FunctionState /*state*/) {
+    //};
 
-    compute_info.compute_func = [](FunctionState /*state*/, const OrtCustomOpApi* /*api*/,
-                                   OrtKernelContext* /*context*/) {
-      return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL,
-                             "This class is for testing session initialization and is not able to execute the nodes.");
-    };
+    compute_info.compute_func = [](FunctionState /*state*/, const OrtCustomOpApi* api,
+                                   OrtKernelContext* context) {
+      const size_t num_outputs = api.KernelContext_GetOutputCount(context);
+      const auto& model_inputs = model->GetInputs();
+      const auto& model_outputs = model->GetOutputs();
 
-    node_compute_funcs.push_back(compute_info);
+      for (size_t i = 0; i < num_outputs; i++) {
+        const auto output_name = model_outputs[i];
+        const auto model_output_type = model->GetOutputType(output_name, *execution);
+        const auto output_shape = model_output_type.dimensions;
+
+        bool is_dynamic_shape_output = false;
+        if (model_output_type.GetOperandBlobByteSize() == 0) {
+          if (!model->SupportsDynamicOutputShape()) {
+            return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL,
+                                   "We do not support dynamic output shape or empty output for now");
+          }
+
+          is_dynamic_shape_output = true;
+        }
+
+        void* output_buffer = nullptr;
+        size_t output_buffer_byte_size;
+        if (!is_dynamic_shape_output) {
+          ORT_RETURN_IF_ERROR(GetOutputBuffer(ort, context,
+                                              *model,
+                                              output_name, output_shape, model_output_type.type,
+                                              &output_buffer));
+          output_buffer_byte_size = model_output_type.GetOperandBlobByteSize();
+        } else {
+          // This output is dynamic (size unknown), will need allocate a buffer for the result
+          // and copy the content to ORT output tensors after the execution (will know output shape after the execution)
+          output_buffer_byte_size = model->GetDynamicOutputBufferSize() * model_output_type.GetElementByteSize();
+          std::unique_ptr<uint8_t[]> buffer_holder(new uint8_t[output_buffer_byte_size]);
+          output_buffer = buffer_holder.get();
+          dynamic_shape_output_types.push_back(model_output_type);
+          dynamic_shape_output_indices.push_back(static_cast<int32_t>(i));
+          dynamic_shape_output_buffers.push_back(std::move(buffer_holder));
+        }
+
+        outputs.push_back({output_buffer, std::move(model_output_type), output_buffer_byte_size});
+        return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL,
+                               "This class is for testing session initialization and is not able to execute the nodes.");
+      };
+
+      node_compute_funcs.push_back(std::move(compute_info));
+    }
+
+    return Status::OK();
   }
-
-  return Status::OK();
-}
 }  // namespace onnxruntime

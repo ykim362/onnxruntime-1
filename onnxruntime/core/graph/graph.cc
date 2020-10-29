@@ -991,7 +991,7 @@ Graph::Graph(const Model& owning_model,
 
   // For now we convert sparse_intializer to dense tensors
   // since there are currently no supported ops that consume sparse
-  // initializers directly. We remove them from graph_proto. We will reconstitute them 
+  // initializers directly. We remove them from graph_proto. We will reconstitute them
   // when saving to ORT format to save space on disk.
   if (graph_proto_->sparse_initializer_size() > 0) {
     for (const auto& sparse_tensor : graph_proto_->sparse_initializer()) {
@@ -1037,8 +1037,8 @@ Graph::Graph(const Model& owning_model,
     auto p = name_to_initial_tensor_.emplace(tensor.name(), &tensor);
     if (!p.second) {
       LOGS(logger_, WARNING) << "Duplicate initializer (dense, sparse or ConstantNode): '" << tensor.name()
-                            << "' the model will use the latest encountered initializer"
-                            << ". Please, fix your model.";
+                             << "' the model will use the latest encountered initializer"
+                             << ". Please, fix your model.";
       p.first->second = &tensor;
     }
 
@@ -1265,6 +1265,7 @@ common::Status Graph::SetOuterScopeNodeArgs(const std::unordered_set<std::string
   return Status::OK();
 }
 
+#if !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
 void Graph::AddEdge(NodeIndex src_node_index, NodeIndex dst_node_index, int src_arg_slot, int dst_arg_slot) {
   if (nodes_.size() <= src_node_index || src_arg_slot < 0 || nodes_.size() <= dst_node_index || dst_arg_slot < 0 ||
       nullptr == nodes_[src_node_index] || nullptr == nodes_[dst_node_index]) {
@@ -1349,6 +1350,7 @@ void Graph::RemoveEdge(NodeIndex src_node_index, NodeIndex dst_node_index, int s
   nodes_[dst_node_index]->MutableRelationships().input_edges.erase(Node::EdgeEnd(*nodes_[src_node_index], src_arg_slot, dst_arg_slot));
   nodes_[src_node_index]->MutableRelationships().output_edges.erase(Node::EdgeEnd(*nodes_[dst_node_index], src_arg_slot, dst_arg_slot));
 }
+#endif  // !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
 
 GSL_SUPPRESS(es .84)  // ignoring return value from unordered_map::insert causes noisy complaint
 Status Graph::BuildConnections(std::unordered_set<std::string>& outer_scope_node_args_consumed) {
@@ -2896,7 +2898,7 @@ std::string Graph::GenerateNodeName(const std::string& base_name) {
 
   return new_name;
 }
-
+#if !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
 Node& Graph::AddNode(const std::string& name,
                      const std::string& op_type,
                      const std::string& description,
@@ -2927,10 +2929,6 @@ Node& Graph::AddNode(const std::string& name,
 }
 
 bool Graph::RemoveNode(NodeIndex p_index) {
-  return RemoveNode(p_index, true);
-}
-
-bool Graph::RemoveNode(NodeIndex p_index, bool release_node) {
   auto node = GetNode(p_index);
   if (nullptr == node) {
     return false;
@@ -2947,8 +2945,9 @@ bool Graph::RemoveNode(NodeIndex p_index, bool release_node) {
     RemoveEdge(input_edge.GetNode().Index(), p_index, input_edge.GetSrcArgIndex(), input_edge.GetDstArgIndex());
   }
 
-  return release_node ? ReleaseNode(p_index) : true;
+  return ReleaseNode(p_index);
 }
+#endif  // !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
 
 bool Graph::AddControlEdge(NodeIndex src_node_index, NodeIndex dst_node_index) {
   if (nodes_.size() <= src_node_index ||
@@ -3042,15 +3041,6 @@ void Graph::ToGraphProtoInternal(ONNX_NAMESPACE::GraphProto& graph_proto) const 
   for (auto& node_idx : graph_viewer.GetNodesInTopologicalOrder()) {
     const gsl::not_null<NodeProto*> node_proto{graph_proto.add_node()};
     const gsl::not_null<const Node*> p_node{GetNode(node_idx)};
-
-    // TODO: Figure out how we want to serialize a model with fused nodes that we may need to defuse
-    // Can we just serialize the original nodes and support runtime fusion in a minimal build?
-    // How would we handle the kernel creation? Do we need anything special or just remove the whole OpSchema
-    // side of things given we are just using a lambda to call the setup state/compute/remove state functions.
-    //
-    // Probably need a hybrid approach: Need to identify the subgraphs an EP could take in order to keep optimizers
-    // that run on those nodes to Level1.
-
     // we need to update any GraphProto attributes for subgraphs so that any changes made by things
     // such as the optimizers are captured. otherwise we can end up saving an invalid graph.
     p_node->ToProto(*node_proto, /* update_subgraphs */ true);
@@ -3329,21 +3319,27 @@ bool Graph::ReleaseNode(NodeIndex index) {
 IOnnxRuntimeOpSchemaCollectionPtr Graph::GetSchemaRegistry() const {
   return schema_registry_;
 }
+#endif  // !defined(ORT_MINIMAL_BUILD)
 
-Node& Graph::FuseSubGraph(std::unique_ptr<::onnxruntime::IndexedSubGraph> sub_graph,
-                          const std::string& fused_node_name,
-                          bool save_original_nodes) {
-  ORT_ENFORCE(nullptr != sub_graph && nullptr != sub_graph->GetMetaDef());
-
-  auto func_meta_def = sub_graph->GetMetaDef();
+#if !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
+Node& Graph::FuseSubGraph(const IndexedSubGraph& sub_graph, const std::string& fused_node_name) {
+  const auto* func_meta_def = sub_graph.GetMetaDef();
   ORT_ENFORCE(nullptr != func_meta_def);
   std::vector<NodeArg*> input_args;
   std::vector<NodeArg*> output_args;
+  std::unordered_map<std::string, int> input_indexes;
+  std::unordered_map<std::string, int> output_indexes;
+
+  int cur_idx = 0;
   for (auto& arg_name : func_meta_def->inputs) {
     input_args.push_back(GetNodeArg(arg_name));
+    input_indexes[arg_name] = cur_idx++;
   }
+
+  cur_idx = 0;
   for (auto& arg_name : func_meta_def->outputs) {
     output_args.push_back(GetNodeArg(arg_name));
+    output_indexes[arg_name] = cur_idx++;
   }
 
   auto& fused_node = AddNode(fused_node_name,
@@ -3355,8 +3351,7 @@ Node& Graph::FuseSubGraph(std::unique_ptr<::onnxruntime::IndexedSubGraph> sub_gr
                              func_meta_def->domain);
 
   fused_node.SetNodeType(Node::Type::Fused);
-  function_container_.emplace_back(MakeFunction(*this, std::move(sub_graph), logger_));
-  fused_node.SetFunctionBody(*function_container_.back());
+  auto new_node_idx = fused_node.Index();
 
   // Remove nodes fused above.
   auto& sub_graph_ref = function_container_.back()->GetIndexedSubGraph();
@@ -3365,18 +3360,55 @@ Node& Graph::FuseSubGraph(std::unique_ptr<::onnxruntime::IndexedSubGraph> sub_gr
     if (nullptr == node) {
       continue;
     }
-    auto output_edges = node->GetRelationships().output_edges;
-    for (auto output_edge : output_edges) {
-      RemoveEdge(node->Index(), output_edge.GetNode().Index(), output_edge.GetSrcArgIndex(), output_edge.GetDstArgIndex());
+
+    // move any applicable input edges to the new node. removal all others
+    auto& input_edges = node->GetRelationships().input_edges;
+    for (const auto& input_edge : input_edges) {
+      const auto& producer = input_edge.GetNode();
+      auto producer_idx = producer.Index();
+      auto src_idx = input_edge.GetSrcArgIndex();
+      auto dst_idx = input_edge.GetDstArgIndex();
+
+      // see if this input is an input of the fused node
+      auto it = input_indexes.find(node->InputDefs()[dst_idx]->Name());
+      if (it != input_indexes.cend()) {
+        AddEdge(producer_idx, new_node_idx, src_idx, it->second);
+      }
+
+      RemoveEdge(producer_idx, node_index, src_idx, dst_idx);
     }
 
-    bool release_removed_nodes = save_original_nodes == false;
-    RemoveNode(node_index, release_removed_nodes);
+    // move any applicable output edges to the new node
+    auto& output_edges = node->GetRelationships().output_edges;
+    for (const auto& output_edge : output_edges) {
+      const auto& consumer = output_edge.GetNode();
+      auto consumer_idx = consumer.Index();
+      auto src_idx = output_edge.GetSrcArgIndex();
+      auto dst_idx = output_edge.GetDstArgIndex();
 
-    if (save_original_nodes) {
-      fused_nodes_.push_back(std::move(nodes_[node_index]));
+      // see if this output is an output of the fused node
+      auto it = input_indexes.find(node->OutputDefs()[src_idx]->Name());
+      if (it != input_indexes.cend()) {
+        AddEdge(consumer_idx, new_node_idx, it->second, dst_idx);
+      }
+
+      RemoveEdge(node_index, consumer_idx, src_idx, dst_idx);
     }
+
+    // remove node
+    RemoveNode(node_index);
   }
+
+  return fused_node;
+}
+#endif
+
+#if !defined(ORT_MINIMAL_BUILD)
+Node& Graph::FuseSubGraph(std::unique_ptr<::onnxruntime::IndexedSubGraph> sub_graph,
+                          const std::string& fused_node_name) {
+  Node& fused_node = FuseSubGraph(*sub_graph, fused_node_name);
+  function_container_.emplace_back(MakeFunction(*this, std::move(sub_graph), logger_));
+  fused_node.SetFunctionBody(*function_container_.back());
 
   return fused_node;
 }
@@ -3599,8 +3631,8 @@ common::Status Graph::LoadFromOrtFormat(const onnxruntime::experimental::fbs::Gr
       auto p = name_to_initial_tensor_.emplace(initializer->name(), initializer);
       if (!p.second) {
         LOGS(logger_, WARNING) << "Duplicate initializer (dense or ConstantNode): '" << initializer->name()
-                              << "' the model will use the latest encountered initializer"
-                              << ". Please, fix your model.";
+                               << "' the model will use the latest encountered initializer"
+                               << ". Please, fix your model.";
         p.first->second = initializer;
       }
     }

@@ -176,36 +176,37 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
     for (auto& provider : providers_) {
       const std::string& type = provider->Type();
       int count = 0;
-      std::vector<Node*> nodes_need_compile;
+      std::vector<Node*> nodes_to_compile;
       std::vector<std::unique_ptr<ComputeCapability>> capabilities =
           provider->GetCapability(graph_viewer, kernel_registry_mgr_.GetKernelRegistriesByProviderType(type));
 
       for (auto& capability : capabilities) {
         Node* n = PlaceNode(graph, std::move(capability->sub_graph), kernel_registry_mgr_, type, count, mode_);
         if (n != nullptr) {
-          nodes_need_compile.push_back(n);
+          nodes_to_compile.push_back(n);
         }
       }
 
-      if (!nodes_need_compile.empty()) {
+      // if mode_ is kAssignOnly, nodes_to_compile will be empty
+      if (!nodes_to_compile.empty()) {
         if (export_dll) {
           std::string dll_path;
-          ORT_RETURN_IF_ERROR(provider->Compile(nodes_need_compile, dll_path));
-          for (auto* node : nodes_need_compile)
+          ORT_RETURN_IF_ERROR(provider->Compile(nodes_to_compile, dll_path));
+          for (auto* node : nodes_to_compile)
             ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(node->Name(), dll_path));
         } else {
           std::vector<NodeComputeInfo> node_compute_funcs;
-          ORT_RETURN_IF_ERROR(provider->Compile(nodes_need_compile, node_compute_funcs));
-          if (node_compute_funcs.size() != nodes_need_compile.size()) {
+          ORT_RETURN_IF_ERROR(provider->Compile(nodes_to_compile, node_compute_funcs));
+          if (node_compute_funcs.size() != nodes_to_compile.size()) {
             return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, type, " did not return correct number of compiled functions");
           }
 
-          for (size_t j = 0; j < nodes_need_compile.size(); j++) {
-            ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(nodes_need_compile[j]->Name(), std::move(node_compute_funcs[j])));
+          for (size_t j = 0; j < nodes_to_compile.size(); j++) {
+            ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(nodes_to_compile[j]->Name(), std::move(node_compute_funcs[j])));
           }
         }
 
-        for (auto* node : nodes_need_compile) {
+        for (auto* node : nodes_to_compile) {
           //prepare the func kernel
           KernelDefBuilder builder;
           BuildFusedKernelDef(builder, *node);
@@ -234,7 +235,7 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
     }
 
     for (auto* node : nodes_need_inline) {
-      // If the node has a functionbody with no kernel and cannot be inlined
+      // If the node has a function body with no kernel and cannot be inlined
       // it is an invalid function
       ORT_RETURN_IF_ERROR(graph.InlineFunction(*node));
     }
@@ -277,33 +278,46 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
       std::vector<std::unique_ptr<ComputeCapability>> capabilities =
           provider->GetCapability(graph_viewer, kernel_registry_mgr_.GetKernelRegistriesByProviderType(type));
 
-      std::vector<GraphViewer> subgraphs_to_fuse;
+      std::vector<IExecutionProvider::FusedNodeAndGraph> fused_nodes;
 
+      int count = 0;
       for (auto& capability : capabilities) {
         const IndexedSubGraph& indexed_sub_graph = *capability->sub_graph;
         const IndexedSubGraph::MetaDef* metadef = indexed_sub_graph.GetMetaDef();
         if (!metadef) {
           // this could happen if we enable another non-ORT EP that has statically assigned kernels.
-          // we could add this EP to the skip list above to avoid the unnecessary call to GetCapability
+          // we could add this EP to the skip list above to avoid the unnecessary call to GetCapability as we would
+          // have already saved the kernel hashes in the serialized session state.
           continue;
         }
 
+        // TODO: Create a variant of FuseSubGraph where the don't pass in the ownership of ComputeCapability
+        // TODO: Create struct with Node and GraphViewer to call Compile with
+        //
+
+        std::ostringstream oss;
+        oss << type << "_" << metadef->name << "_" << count++;
+        std::string node_name = oss.str();
+        Node& fused_node = graph.FuseSubGraph(indexed_sub_graph, node_name);
+        fused_node.SetExecutionProviderType(type);
+
         // create filtered graph viewer for this set of nodes
-        // TODO: Could save the topological sort in the GraphViewer ctor by adding variant to construct from existing
-        // GraphViewer instance instead of Graph.
+        // TODO: Could avoid the topological sort in the GraphViewer ctor by constructing from an existing
+        // GraphViewer instance instead of the Graph (copying the topological order instead of recalculating).
         // Mobile models are expected to be small though so shouldn't be a significant perf cost for now.
-        subgraphs_to_fuse.emplace_back(GraphViewer(graph, indexed_sub_graph));
+        fused_nodes.emplace_back(
+            IExecutionProvider::FusedNodeAndGraph{&fused_node, GraphViewer(graph, indexed_sub_graph)});
       }
 
       std::vector<NodeComputeInfo> node_compute_funcs;
-      ORT_RETURN_IF_ERROR(provider->Compile(subgraphs_to_fuse, node_compute_funcs));
+      ORT_RETURN_IF_ERROR(provider->Compile(fused_nodes, node_compute_funcs));
 
-      if (node_compute_funcs.size() != subgraphs_to_fuse.size()) {
+      if (node_compute_funcs.size() != fused_nodes.size()) {
         return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, type, " did not return correct number of compiled functions");
       }
 
-      for (size_t j = 0; j < subgraphs_to_fuse.size(); j++) {
-        ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(subgraphs_to_fuse[j].Name(), std::move(node_compute_funcs[j])));
+      for (size_t j = 0; j < fused_nodes.size(); j++) {
+        ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(fused_nodes[j].fused_node->Name(), std::move(node_compute_funcs[j])));
       }
     }
   }

@@ -174,7 +174,7 @@ class IExecutionProvider {
   /**
   Given a list of fused_node, return create_state/compute/release_state func for each node.
   */
-  virtual common::Status Compile(const std::vector<onnxruntime::Node*>& fused_node,
+  virtual common::Status Compile(const std::vector<onnxruntime::Node*>& fused_nodes,
                                  std::vector<NodeComputeInfo>& node_compute_funcs);
 
   /**
@@ -184,18 +184,22 @@ class IExecutionProvider {
      Compute_${node_name}
      Release_State_${node_name}
   */
-  virtual common::Status Compile(const std::vector<onnxruntime::Node*>& fused_node,
+  virtual common::Status Compile(const std::vector<onnxruntime::Node*>& fused_nodes,
                                  std::string& dll_path);
 
 #endif
 
+  struct FusedNodeAndGraph {
+    const onnxruntime::Node* fused_node;
+    GraphViewer filtered_graph;  // GraphViewer that filters the full graph to the nodes that are included in 'node'
+  };
   /**
   Given a list of GraphViewer instances, one for each ComputeCapability, 
   return create_state/compute/release_state func for each node.
   @remarks This is an optional interface that is only needed if the execution provider compiles nodes
            in a scenario involving the minimal build. i.e. on a mobile or embedded device with ORT format model
   */
-  virtual common::Status Compile(const std::vector<GraphViewer>& subgraphs,
+  virtual common::Status Compile(const std::vector<FusedNodeAndGraph>& fused_nodes,
                                  std::vector<NodeComputeInfo>& node_compute_funcs);
 
   void SetLogger(const logging::Logger* logger) {
