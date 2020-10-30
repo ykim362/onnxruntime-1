@@ -8,6 +8,7 @@
 #include "core/framework/feeds_fetches_manager.h"
 #include "core/framework/op_kernel_context_internal.h"
 #include "core/framework/session_state.h"
+#include "core/framework/tensorprotoutils.h"
 #include "core/graph/model.h"
 #include "core/session/onnxruntime_cxx_api.h"
 
@@ -192,79 +193,65 @@ InternalTestingExecutionProvider::GetCapability(const onnxruntime::GraphViewer& 
   return result;
 }
 
-common::Status InternalTestingExecutionProvider::Compile(const std::vector<GraphViewer>& subgraphs,
+common::Status InternalTestingExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>& fused_nodes,
                                                          std::vector<NodeComputeInfo>& node_compute_funcs) {
-  //
-  // We will create a pseudo EP that uses the ORT CPU EP to execute the nodes
-  //
-
-  for (const auto& viewer : subgraphs) {
+  // Create a function to generate dummy empty output for each fused node so the model should be able to be executed.
+  for (const auto& node_and_viewer : fused_nodes) {
     NodeComputeInfo compute_info;
+    const Node& node = node_and_viewer.fused_node;
+    const GraphViewer& graph_viewer = node_and_viewer.filtered_graph;
 
     // TEMP debug output
     {
       std::cout << "Fusing nodes: ";
-      for (const auto& node : viewer.Nodes()) {
-        std::cout << " '" << node.Name() << "':" << node.Index();
+      for (const auto& unfused_node : graph_viewer.Nodes()) {
+        std::cout << " '" << unfused_node.Name() << "':" << unfused_node.Index();
       }
       std::cout << std::endl;
     }
 
-    compute_info.create_state_func = [&](ComputeContext* /*context*/, FunctionState* /*state*/) {
-      return 0;
-    };
+    //compute_info.create_state_func = [&](ComputeContext* /*context*/, FunctionState* /*state*/) {
+    //  return 0;
+    //};
 
     //compute_info.release_state_func = [](FunctionState /*state*/) {
     //};
 
-    compute_info.compute_func = [](FunctionState /*state*/, const OrtCustomOpApi* api,
-                                   OrtKernelContext* context) {
-      const size_t num_outputs = api.KernelContext_GetOutputCount(context);
-      const auto& model_inputs = model->GetInputs();
-      const auto& model_outputs = model->GetOutputs();
+    compute_info.compute_func = [&node](FunctionState /*state*/, const OrtCustomOpApi* c_api,
+                                        OrtKernelContext* context) -> Status {
+      Ort::CustomOpApi api{*c_api};  // use C++ API for convenience
+
+      const auto outputs = node.OutputDefs();
+      const size_t num_outputs = outputs.size();
 
       for (size_t i = 0; i < num_outputs; i++) {
-        const auto output_name = model_outputs[i];
-        const auto model_output_type = model->GetOutputType(output_name, *execution);
-        const auto output_shape = model_output_type.dimensions;
-
-        bool is_dynamic_shape_output = false;
-        if (model_output_type.GetOperandBlobByteSize() == 0) {
-          if (!model->SupportsDynamicOutputShape()) {
-            return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL,
-                                   "We do not support dynamic output shape or empty output for now");
-          }
-
-          is_dynamic_shape_output = true;
+        const auto* shape_proto = outputs[i]->Shape();
+        if (shape_proto == nullptr) {
+          return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "Unknown output shapes are not supported");
         }
 
-        void* output_buffer = nullptr;
-        size_t output_buffer_byte_size;
-        if (!is_dynamic_shape_output) {
-          ORT_RETURN_IF_ERROR(GetOutputBuffer(ort, context,
-                                              *model,
-                                              output_name, output_shape, model_output_type.type,
-                                              &output_buffer));
-          output_buffer_byte_size = model_output_type.GetOperandBlobByteSize();
-        } else {
-          // This output is dynamic (size unknown), will need allocate a buffer for the result
-          // and copy the content to ORT output tensors after the execution (will know output shape after the execution)
-          output_buffer_byte_size = model->GetDynamicOutputBufferSize() * model_output_type.GetElementByteSize();
-          std::unique_ptr<uint8_t[]> buffer_holder(new uint8_t[output_buffer_byte_size]);
-          output_buffer = buffer_holder.get();
-          dynamic_shape_output_types.push_back(model_output_type);
-          dynamic_shape_output_indices.push_back(static_cast<int32_t>(i));
-          dynamic_shape_output_buffers.push_back(std::move(buffer_holder));
+        const TensorShape shape = utils::GetTensorShapeFromTensorShapeProto(*shape_proto);
+        if (shape.Size() < 0) {
+          return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "Unknown output shapes are not supported. Output '",
+                                 outputs[i]->Name(), "' has shape ", shape);
         }
 
-        outputs.push_back({output_buffer, std::move(model_output_type), output_buffer_byte_size});
-        return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL,
-                               "This class is for testing session initialization and is not able to execute the nodes.");
+        // create the output_tensor.
+        auto* ortvalue = api.KernelContext_GetOutput(context, i, shape.GetDims().data(), shape.GetDims().size());
+
+        // and fill with zeros
+        auto* tensor = ortvalue->GetMutable<Tensor>();
+        void* data = tensor->MutableDataRaw();
+        auto bytes = tensor->SizeInBytes();
+        memset(data, 0, bytes);
       };
 
-      node_compute_funcs.push_back(std::move(compute_info));
-    }
+      return Status::OK();
+    };
 
-    return Status::OK();
+    node_compute_funcs.push_back(std::move(compute_info));
   }
+
+  return Status::OK();
+}
 }  // namespace onnxruntime

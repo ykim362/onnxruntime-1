@@ -3353,9 +3353,8 @@ Node& Graph::FuseSubGraph(const IndexedSubGraph& sub_graph, const std::string& f
   fused_node.SetNodeType(Node::Type::Fused);
   auto new_node_idx = fused_node.Index();
 
-  // Remove nodes fused above.
-  auto& sub_graph_ref = function_container_.back()->GetIndexedSubGraph();
-  for (auto node_index : sub_graph_ref.nodes) {
+  // Remove nodes that were fused
+  for (auto node_index : sub_graph.nodes) {
     auto node = GetNode(node_index);
     if (nullptr == node) {
       continue;
@@ -3407,6 +3406,7 @@ Node& Graph::FuseSubGraph(const IndexedSubGraph& sub_graph, const std::string& f
 Node& Graph::FuseSubGraph(std::unique_ptr<::onnxruntime::IndexedSubGraph> sub_graph,
                           const std::string& fused_node_name) {
   Node& fused_node = FuseSubGraph(*sub_graph, fused_node_name);
+
   function_container_.emplace_back(MakeFunction(*this, std::move(sub_graph), logger_));
   fused_node.SetFunctionBody(*function_container_.back());
 
