@@ -190,8 +190,9 @@ class IExecutionProvider {
 #endif
 
   struct FusedNodeAndGraph {
-    const onnxruntime::Node* fused_node;
-    GraphViewer filtered_graph;  // GraphViewer that filters the full graph to the nodes that are included in 'node'
+    const std::reference_wrapper<onnxruntime::Node> fused_node;
+    // GraphViewer that filters the full graph to the nodes that are covered by 'node'
+    const std::reference_wrapper<GraphViewer> filtered_graph;
   };
   /**
   Given a list of GraphViewer instances, one for each ComputeCapability, 

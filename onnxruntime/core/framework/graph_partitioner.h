@@ -42,6 +42,10 @@ class GraphPartitioner {
  private:
   ORT_DISALLOW_COPY_ASSIGNMENT_AND_MOVE(GraphPartitioner);
 
+  Status InlineNodes(Graph& graph, bool export_dll, FuncManager& func_mgr) const;
+  Status PartitionOnnxFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr) const;
+  Status PartitionOrtFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr) const;
+
   KernelRegistryManager& kernel_registry_mgr_;
   const ExecutionProviders& providers_;
   Mode mode_;
