@@ -173,7 +173,9 @@ InternalTestingExecutionProvider::GetCapability(const onnxruntime::GraphViewer& 
     // Assign inputs and outputs to subgraph's meta_def
     auto meta_def = onnxruntime::make_unique<::onnxruntime::IndexedSubGraph::MetaDef>();
     meta_def->name = "InternalTestingEP_" + std::to_string(fused_subgraphs_counter++);
-    meta_def->domain = "Custom";
+    meta_def->domain = kMSDomain;
+    meta_def->since_version = 1;
+    meta_def->status = ONNX_NAMESPACE::EXPERIMENTAL;
 
     for (const auto& input : inputs) {
       meta_def->inputs.push_back(input.second->Name());
@@ -183,8 +185,6 @@ InternalTestingExecutionProvider::GetCapability(const onnxruntime::GraphViewer& 
       meta_def->outputs.push_back(output.second->Name());
     }
 
-    meta_def->status = ONNX_NAMESPACE::EXPERIMENTAL;
-    meta_def->since_version = 1;
     sub_graph->SetMetaDef(std::move(meta_def));
 
     result.push_back(onnxruntime::make_unique<ComputeCapability>(std::move(sub_graph)));
@@ -210,12 +210,12 @@ common::Status InternalTestingExecutionProvider::Compile(const std::vector<Fused
       std::cout << std::endl;
     }
 
-    //compute_info.create_state_func = [&](ComputeContext* /*context*/, FunctionState* /*state*/) {
-    //  return 0;
-    //};
+    compute_info.create_state_func = [&](ComputeContext* /*context*/, FunctionState* /*state*/) {
+      return 0;
+    };
 
-    //compute_info.release_state_func = [](FunctionState /*state*/) {
-    //};
+    compute_info.release_state_func = [](FunctionState /*state*/) {
+    };
 
     compute_info.compute_func = [&node](FunctionState /*state*/, const OrtCustomOpApi* c_api,
                                         OrtKernelContext* context) -> Status {

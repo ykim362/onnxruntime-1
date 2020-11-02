@@ -764,7 +764,7 @@ class Graph {
   Node& AddNode(const Node& other);
 #endif
 
-#if !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
   /** Add a Node to this Graph.
   @param name The Node name. Must be unique in this Graph.
   @param op_type The operator type. e.g. ONNX operator name.
@@ -897,16 +897,19 @@ class Graph {
   }
 #endif
 
-#if !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
   /**
-  Create a single Node that is the result of the a fusion of multiple nodes in this Graph.
+  Create a single Node that will be the result of the a fusion of multiple nodes in this Graph.
   @param sub_graph A IndexSubGraph instance with details of the nodes to fuse.
   @param fused_node_name The name for the new Node.
   @returns Node with fused subgraph.
   @remarks As a new Graph instance for the fused nodes is not created, a GraphViewer can be constructed with the
-           IndexedSubGraph information to provide a view of the subgraph.
+           IndexedSubGraph information to provide a view of the subgraph. The original nodes are left in place
+           until after this happens. Call FinalizeFuseSubGraph to remove them.
   */
-  Node& FuseSubGraph(const IndexedSubGraph& sub_graph, const std::string& fused_node_name);
+  Node& BeginFuseSubGraph(const IndexedSubGraph& sub_graph, const std::string& fused_node_name);
+
+  void FinalizeFuseSubGraph(const IndexedSubGraph& sub_graph, Node& fused_node);
 #endif
 
 #if !defined(ORT_MINIMAL_BUILD)
@@ -1261,12 +1264,14 @@ class Graph {
 
 #endif  // !defined(ORT_MINIMAL_BUILD)
 
-#if !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
   gsl::not_null<Node*> AllocateNode();
 
   // Release the node.
   // @returns false if node_index was invalid.
   bool ReleaseNode(NodeIndex node_index);
+
+  Node& CreateFusedSubGraphNode(const IndexedSubGraph& sub_graph, const std::string& fused_node_name);
 #endif
 
   Node* NodeAtIndexImpl(NodeIndex node_index) const {

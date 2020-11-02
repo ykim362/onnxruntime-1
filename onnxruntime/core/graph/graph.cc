@@ -1265,7 +1265,7 @@ common::Status Graph::SetOuterScopeNodeArgs(const std::unordered_set<std::string
   return Status::OK();
 }
 
-#if !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 void Graph::AddEdge(NodeIndex src_node_index, NodeIndex dst_node_index, int src_arg_slot, int dst_arg_slot) {
   if (nodes_.size() <= src_node_index || src_arg_slot < 0 || nodes_.size() <= dst_node_index || dst_arg_slot < 0 ||
       nullptr == nodes_[src_node_index] || nullptr == nodes_[dst_node_index]) {
@@ -1350,7 +1350,7 @@ void Graph::RemoveEdge(NodeIndex src_node_index, NodeIndex dst_node_index, int s
   nodes_[dst_node_index]->MutableRelationships().input_edges.erase(Node::EdgeEnd(*nodes_[src_node_index], src_arg_slot, dst_arg_slot));
   nodes_[src_node_index]->MutableRelationships().output_edges.erase(Node::EdgeEnd(*nodes_[dst_node_index], src_arg_slot, dst_arg_slot));
 }
-#endif  // !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
+#endif  // !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 
 GSL_SUPPRESS(es .84)  // ignoring return value from unordered_map::insert causes noisy complaint
 Status Graph::BuildConnections(std::unordered_set<std::string>& outer_scope_node_args_consumed) {
@@ -2898,7 +2898,7 @@ std::string Graph::GenerateNodeName(const std::string& base_name) {
 
   return new_name;
 }
-#if !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 Node& Graph::AddNode(const std::string& name,
                      const std::string& op_type,
                      const std::string& description,
@@ -2947,7 +2947,7 @@ bool Graph::RemoveNode(NodeIndex p_index) {
 
   return ReleaseNode(p_index);
 }
-#endif  // !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
+#endif  // !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 
 bool Graph::AddControlEdge(NodeIndex src_node_index, NodeIndex dst_node_index) {
   if (nodes_.size() <= src_node_index ||
@@ -3321,8 +3321,8 @@ IOnnxRuntimeOpSchemaCollectionPtr Graph::GetSchemaRegistry() const {
 }
 #endif  // !defined(ORT_MINIMAL_BUILD)
 
-#if !defined(ORT_MINIMAL_BUILD_WITH_CUSTOM_EPS)
-Node& Graph::FuseSubGraph(const IndexedSubGraph& sub_graph, const std::string& fused_node_name) {
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+Node& Graph::CreateFusedSubGraphNode(const IndexedSubGraph& sub_graph, const std::string& fused_node_name) {
   const auto* func_meta_def = sub_graph.GetMetaDef();
   ORT_ENFORCE(nullptr != func_meta_def);
   std::vector<NodeArg*> input_args;
@@ -3351,6 +3351,36 @@ Node& Graph::FuseSubGraph(const IndexedSubGraph& sub_graph, const std::string& f
                              func_meta_def->domain);
 
   fused_node.SetNodeType(Node::Type::Fused);
+
+#if !defined(ORT_MINIMAL_BUILD)
+
+#endif
+
+  return fused_node;
+}
+
+Node& Graph::BeginFuseSubGraph(const IndexedSubGraph& sub_graph, const std::string& fused_node_name) {
+  Node& node = CreateFusedSubGraphNode(sub_graph, fused_node_name);
+  auto func = onnxruntime::make_unique<ViewerFunctionImpl>(*this, , logger);
+}
+
+void Graph::FinalizeFuseSubGraph(const IndexedSubGraph& sub_graph, Node& fused_node) {
+  const auto* func_meta_def = sub_graph.GetMetaDef();
+  ORT_ENFORCE(nullptr != func_meta_def);
+
+  std::unordered_map<std::string, int> input_indexes;
+  std::unordered_map<std::string, int> output_indexes;
+
+  int cur_idx = 0;
+  for (auto& arg_name : func_meta_def->inputs) {
+    input_indexes[arg_name] = cur_idx++;
+  }
+
+  cur_idx = 0;
+  for (auto& arg_name : func_meta_def->outputs) {
+    output_indexes[arg_name] = cur_idx++;
+  }
+
   auto new_node_idx = fused_node.Index();
 
   // Remove nodes that were fused
@@ -3397,15 +3427,17 @@ Node& Graph::FuseSubGraph(const IndexedSubGraph& sub_graph, const std::string& f
     // remove node
     RemoveNode(node_index);
   }
-
-  return fused_node;
 }
+
 #endif
 
 #if !defined(ORT_MINIMAL_BUILD)
-Node& Graph::FuseSubGraph(std::unique_ptr<::onnxruntime::IndexedSubGraph> sub_graph,
+//return onnxruntime::make_unique<SchemaOnlyFunctionImpl>(graph, std::move(customized_func), logger);
+
+Node& Graph::FuseSubGraph(std::unique_ptr<IndexedSubGraph> sub_graph,
                           const std::string& fused_node_name) {
-  Node& fused_node = FuseSubGraph(*sub_graph, fused_node_name);
+  Node& fused_node = CreateFusedSubGraphNode(*sub_graph, fused_node_name);
+  FinalizeFuseSubGraph(*sub_graph, fused_node);
 
   function_container_.emplace_back(MakeFunction(*this, std::move(sub_graph), logger_));
   fused_node.SetFunctionBody(*function_container_.back());

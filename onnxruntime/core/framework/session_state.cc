@@ -767,7 +767,7 @@ Status SessionState::LoadFromOrtFormat(const fbs::SessionState& fbs_session_stat
   if (!compiled_kernel_hashes_.empty()) {
     for (const auto& node : graph_.Nodes()) {
       if (kernel_create_info_map_.count(node.Index()) == 0) {
-        auto hash_info = compiled_kernel_hashes_.find(node.Name());
+        auto hash_info = compiled_kernel_hashes_.find(node.OpType());
         ORT_RETURN_IF(hash_info == compiled_kernel_hashes_.cend(),
                       "Unable to find compiled kernel hash for node '", node.Name(), "'.")
 
