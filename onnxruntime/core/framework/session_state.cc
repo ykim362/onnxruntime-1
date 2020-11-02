@@ -740,16 +740,40 @@ Status SessionState::LoadFromOrtFormat(const fbs::SessionState& fbs_session_stat
                     "Size mismatch for kernel create info node indexes and hashes. Invalid ORT format model.",
                     node_indices->size(), " != ", kernel_def_hashes->size());
 
+  auto add_kernel_by_hash =
+      [&kernel_registry_manager, this](const Node& node, uint64_t hash) {
+        const KernelCreateInfo* kci = nullptr;
+        ORT_RETURN_IF_ERROR(kernel_registry_manager.SearchKernelRegistry(node, hash, &kci));
+        kernel_create_info_map_.emplace(node.Index(), gsl::not_null<const KernelCreateInfo*>(kci));
+        return Status::OK();
+      };
+
   for (flatbuffers::uoffset_t i = 0; i < node_indices->size(); i++) {
     auto node_idx = node_indices->Get(i);
-    auto kernal_hash = kernel_def_hashes->Get(i);
+    auto kernel_hash = kernel_def_hashes->Get(i);
 
     const Node* node = graph_.GetNode(node_idx);
-    ORT_RETURN_IF(node == nullptr, "Can't find node with index ", node_idx, ". Invalid ORT format model.");
+    if (node == nullptr) {
+      // this is OK if we have compiled kernels. if not the model is invalid.
+      ORT_RETURN_IF(compiled_kernel_hashes_.empty(),
+                    "Can't find node with index ", node_idx, ". Invalid ORT format model.");
+      continue;
+    }
 
-    const KernelCreateInfo* kci = nullptr;
-    ORT_RETURN_IF_ERROR(kernel_registry_manager.SearchKernelRegistry(*node, kernal_hash, &kci));
-    kernel_create_info_map_.emplace(node_idx, gsl::not_null<const KernelCreateInfo*>(kci));
+    ORT_RETURN_IF_ERROR(add_kernel_by_hash(*node, kernel_hash));
+  }
+
+  // lookup the hashes for any nodes we compiled.
+  if (!compiled_kernel_hashes_.empty()) {
+    for (const auto& node : graph_.Nodes()) {
+      if (kernel_create_info_map_.count(node.Index()) == 0) {
+        auto hash_info = compiled_kernel_hashes_.find(node.Name());
+        ORT_RETURN_IF(hash_info == compiled_kernel_hashes_.cend(),
+                      "Unable to find compiled kernel hash for node '", node.Name(), "'.")
+
+        ORT_RETURN_IF_ERROR(add_kernel_by_hash(node, hash_info->second));
+      }
+    }
   }
 
   if (!subgraph_session_states_.empty()) {
@@ -816,6 +840,9 @@ Status SessionState::FinalizeSessionState(const std::basic_string<PATH_CHAR_TYPE
   if (serialized_session_state) {
 #if defined(ENABLE_ORT_FORMAT_LOAD)
     ORT_RETURN_IF_ERROR(LoadFromOrtFormat(*serialized_session_state, kernel_registry_manager));
+
+    // if we have an EP that can compile nodes we need to go update the kernel create info for those nodes
+
 #else
     return Status(ONNXRUNTIME, INVALID_ARGUMENT,
                   "ORT format model is not supported in this build.");

@@ -830,9 +830,9 @@ common::Status InferenceSession::TransformGraph(onnxruntime::Graph& graph,
                                          : GraphPartitioner::Mode::kStandard;
 
   // Do partitioning based on execution providers' capability.
-  GraphPartitioner partitioner(kernel_registry_manager, providers, mode);
+  GraphPartitioner partitioner(kernel_registry_manager, providers);
   ORT_RETURN_IF_ERROR_SESSIONID_(partitioner.Partition(graph, session_state.ExportDll(),
-                                                       session_state.GetMutableFuncMgr()));
+                                                       session_state.GetMutableFuncMgr(), mode));
 
   // apply transformers except default transformers
   // Default transformers are required for correctness and they are owned and run by inference session
@@ -895,10 +895,28 @@ common::Status InferenceSession::TransformGraph(onnxruntime::Graph& graph,
 
   return common::Status::OK();
 }
-
 #endif  // !defined(ORT_MINIMAL_BUILD)
 
 #if defined(ENABLE_ORT_FORMAT_LOAD)
+Status InferenceSession::PartitionOrtFormatModel(onnxruntime::Graph& graph,
+                                                 const ExecutionProviders& providers,
+                                                 KernelRegistryManager& kernel_registry_manager,
+                                                 SessionState& session_state) const {
+  std::unordered_map<std::string, uint64_t> compiled_kernel_hashes;
+
+  GraphPartitioner partitioner(kernel_registry_manager, providers);
+  ORT_RETURN_IF_ERROR_SESSIONID_(partitioner.Partition(graph, session_state.ExportDll(),
+                                                       session_state.GetMutableFuncMgr(),
+                                                       GraphPartitioner::Mode::kOrtFormatLoad,
+                                                       &compiled_kernel_hashes));
+
+  if (!compiled_kernel_hashes.empty()) {
+    session_state.SetCompiledKernelHashes(std::move(compiled_kernel_hashes));
+  }
+
+  return Status::OK();
+}
+
 template <typename T>
 static Status LoadOrtModelBytes(const std::basic_string<T>& model_uri,
                                 std::basic_string<ORTCHAR_T>& model_location,
@@ -1172,13 +1190,12 @@ common::Status InferenceSession::Initialize() {
 #endif  // !defined(ORT_MINIMAL_BUILD)
     {
       // for a minimal build (or testing that behavior) nodes are already partitioned, but a custom EP may compile
-      // some at runtime.
+      // some at runtime. run the partitioning to allow that to happen.
+      //
       // We always have the CPU EP, so only need to run this if some other EP is enabled
       if (execution_providers_.NumProviders() > 1) {
-        GraphPartitioner partitioner(kernel_registry_manager_, execution_providers_,
-                                     GraphPartitioner::Mode::kOrtFormatLoad);
-        const bool export_dll = false;  // not currently supported
-        ORT_RETURN_IF_ERROR_SESSIONID_(partitioner.Partition(graph, export_dll, session_state_->GetMutableFuncMgr()));
+        ORT_RETURN_IF_ERROR_SESSIONID_(PartitionOrtFormatModel(graph, execution_providers_, kernel_registry_manager_,
+                                                               *session_state_));
       }
     }
 

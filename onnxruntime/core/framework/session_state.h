@@ -269,6 +269,10 @@ class SessionState {
 #endif
 
 #if defined(ENABLE_ORT_FORMAT_LOAD)
+  void SetCompiledKernelHashes(std::unordered_map<std::string, uint64_t>&& compiled_kernel_hashes) {
+    compiled_kernel_hashes_ = std::move(compiled_kernel_hashes);
+  }
+
   Status LoadFromOrtFormat(const onnxruntime::experimental::fbs::SessionState& fbs_session_state,
                            const KernelRegistryManager& kernel_registry_manager);
 #endif
@@ -332,6 +336,10 @@ class SessionState {
 
   // KernelCreateInfo for each node so we do kernel lookup once
   std::unordered_map<NodeIndex, gsl::not_null<const KernelCreateInfo*>> kernel_create_info_map_;
+
+  // If we compile kernels in a minimal build we need a way to find the kernel using the hash.
+  // We populate this map when doing the kernel compilation in GraphPartitioner, and check use it in LoadFromOrtFormat.
+  std::unordered_map<std::string, uint64_t> compiled_kernel_hashes_;
 
   // cache of the constructed kernels to avoid spending construction time per executor
   std::vector<OpKernel*> session_kernels_;

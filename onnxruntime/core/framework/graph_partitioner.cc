@@ -41,8 +41,17 @@ NonCudaOps non_cuda;
 using namespace ::onnxruntime::common;
 namespace onnxruntime {
 
+static KernelDefBuilder& BuildFusedKernelDef(KernelDefBuilder& builder, const IndexedSubGraph::MetaDef& metadef,
+                                             const std::string& provider_type) {
+  builder.SetName(metadef.name)
+      .SetDomain(metadef.domain)
+      .SinceVersion(metadef.since_version)
+      .Provider(provider_type);
+  return builder;
+}
+
 #if !defined(ORT_MINIMAL_BUILD)
-KernelDefBuilder& BuildFusedKernelDef(KernelDefBuilder& builder, const onnxruntime::Node& node) {
+static KernelDefBuilder& BuildFusedKernelDef(KernelDefBuilder& builder, const onnxruntime::Node& node) {
   auto schema = node.Op();
   builder.SetName(schema->Name())
       .SetDomain(schema->domain())
@@ -70,6 +79,7 @@ static Node* PlaceNode(Graph& graph, std::unique_ptr<IndexedSubGraph>& capabilit
   }
 
   Node* result = nullptr;
+  bool release_capability = true;
 
   if (nullptr == capability->GetMetaDef()) {
     // The <provider> can run a single node in the <graph> if not using meta-defs.
@@ -81,6 +91,7 @@ static Node* PlaceNode(Graph& graph, std::unique_ptr<IndexedSubGraph>& capabilit
       // The node was not fused or assigned. Assign it to this <provider>.
       node->SetExecutionProviderType(provider_type);
     }
+
   } else {
     // The <provider> can run a fused <sub_graph> in the <graph>.
 
@@ -90,10 +101,25 @@ static Node* PlaceNode(Graph& graph, std::unique_ptr<IndexedSubGraph>& capabilit
     for (auto node_index : capability->nodes) {
       auto node = graph.GetNode(node_index);
       if (nullptr == node || !node->GetExecutionProviderType().empty()) {
-        // The node was fused or assigned, so that the whole sub-graph will not be assigned to this <provider>
-        // The assumption is that this <provider> can only run the sub-graph as a whole unit.
-        sub_graph_available_for_assignment = false;
-        break;
+        // if mode is kAssignOnly we want all nodes that can _potentially_ be taken by compiling EPs to be assigned,
+        // so that we aggregate the nodes covered and ensure the original nodes remain in the ORT format model by
+        // preventing level 2 and 3 optimizers from changing them (optimizers check the EP the node is assigned to
+        // and only make changes if the EP is on the optimizer's list of supported EPs. an EP that compiles nodes
+        // should never be on those lists).
+        //
+        // when the ORT format model is loaded we will process it normally with EP priority being applied for
+        // whichever EPs are enabled at the time.
+        //
+        //e.g. an Android NNAPI EP may take different/overlapping nodes to a iOS CoreML EP.
+        // We want the ORT format model to be able to be run as efficiently as possible on either platform,
+        // so we want all the nodes that either may take to be preserved. If we did not do this we would
+        // need to create one ORT format model for Android and one for iOS.
+        if (mode != GraphPartitioner::Mode::kAssignOnly) {
+          // The node was fused or assigned, so that the whole sub-graph will not be assigned to this <provider>
+          // The assumption is that this <provider> can only run the sub-graph as a whole unit.
+          sub_graph_available_for_assignment = false;
+          break;
+        }
       }
     }
 
@@ -106,39 +132,22 @@ static Node* PlaceNode(Graph& graph, std::unique_ptr<IndexedSubGraph>& capabilit
         Node* fused_node = nullptr;
         if (fusion_style == IExecutionProvider::FusionStyle::Function) {
           fused_node = &graph.FuseSubGraph(std::move(capability), node_name);
-
         } else {
-          // create the Schema if this is not a minimal build
-          //auto schema = node.Op();
-          //builder.SetName(schema->Name())
-          //    .SetDomain(schema->domain())
-          //    .SinceVersion(schema->SinceVersion())
-          //    .Provider(node.GetExecutionProviderType());
-          //OpSchema op_schema_ = onnxruntime::make_unique<ONNX_NAMESPACE::OpSchema>();
-          //op_schema_->SetName(meta_def->name);
-          //op_schema_->SetDomain(meta_def->domain);
-          //op_schema_->SetDoc(meta_def->doc_string);
-          //op_schema_->SinceVersion(meta_def->since_version);
-
           // create a fused node without copying everything to a Function body. The IndexedSubGraph will be passed
           // through to Compile via a filtered GraphViewer so we don't transfer ownership of it here.
+          release_capability = false;
           fused_node = &graph.FuseSubGraph(*capability, node_name);
-
-          // TODO: Do we need the Schema to be available?
-          // Or can we instead check if this is found in the function manager when doing kernel lookup
         }
 
         fused_node->SetExecutionProviderType(provider_type);
 
-        // ORIGINAL: Given we're compiling the node, searching the kernel registry for something with the same
-        // randomly generated name seem somewhat pointless
-        //// searching in kernel registries, if no kernel registered for the fused_node, use compile approach
-        //if (!KernelRegistryManager::HasImplementationOf(kernel_registry_mgr, *fused_node, provider_type)) {
-        //  result = &fused_node;
-        //}
-
-        result = fused_node;
+        // searching in kernel registries, if no kernel registered for the fused_node, use compile approach
+        if (!KernelRegistryManager::HasImplementationOf(kernel_registry_mgr, *fused_node, provider_type)) {
+          result = fused_node;
+        }
       } else {
+        assert(mode == GraphPartitioner::Mode::kAssignOnly);
+
         // assign the nodes in the indexed subgraph to the current EP so that level 2+ optimizers will not change them.
         // This is used when exporting an ORT format model to maintain the original nodes and re-do the fusion
         // at runtime. The original nodes provide a fallback if fewer nodes can be fused at runtime due to device
@@ -150,6 +159,10 @@ static Node* PlaceNode(Graph& graph, std::unique_ptr<IndexedSubGraph>& capabilit
         }
       }
     }
+  }
+
+  if (release_capability) {
+    capability = nullptr;
   }
 
   return result;
@@ -184,7 +197,8 @@ Status GraphPartitioner::InlineNodes(Graph& graph, bool export_dll, FuncManager&
   return Status::OK();
 }
 
-Status GraphPartitioner::PartitionOnnxFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr) const {
+Status GraphPartitioner::PartitionOnnxFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr,
+                                                  Mode mode) const {
   GraphViewer graph_viewer(graph);
 
   // fused_kernel_registry is preparing the kernels created on the fly for fused sub graph.
@@ -205,34 +219,100 @@ Status GraphPartitioner::PartitionOnnxFormatModel(Graph& graph, bool export_dll,
   // delegate the compute to the functions inside the dlls.
   for (auto& provider : providers_) {
     const std::string& type = provider->Type();
+    auto fusion_style = provider->GetFusionStyle();
     int count = 0;
     std::vector<Node*> nodes_to_compile;
+
     std::vector<std::unique_ptr<ComputeCapability>> capabilities =
         provider->GetCapability(graph_viewer, kernel_registry_mgr_.GetKernelRegistriesByProviderType(type));
 
     for (auto& capability : capabilities) {
-      Node* n = PlaceNode(graph, capability->sub_graph, kernel_registry_mgr_, type, count,
-                          provider->GetFusionStyle(), mode_);
+      Node* n = PlaceNode(graph, capability->sub_graph, kernel_registry_mgr_, type, count, fusion_style, mode);
       if (n != nullptr) {
         nodes_to_compile.push_back(n);
       }
     }
 
-    // if mode_ is kAssignOnly, nodes_to_compile will be empty
+    // NOTE: if mode_ is kAssignOnly, nodes_to_compile will be empty
     if (!nodes_to_compile.empty()) {
-    TODO:
-      We need to optionally create the FusedNodeAndGraph instances if the fusion style requires that
-          // Need to come up with a clean way or just require for now that only applies if export_dll is false
+      std::vector<NodeComputeInfo> node_compute_funcs;
 
-          if (export_dll) {
-        std::string dll_path;
-        ORT_RETURN_IF_ERROR(provider->Compile(nodes_to_compile, dll_path));
-        for (auto* node : nodes_to_compile)
-          ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(node->Name(), dll_path));
+      if (export_dll) {
+        ORT_ENFORCE(fusion_style == IExecutionProvider::FusionStyle::Function,
+                    "Must use Function based fusion when exporting compiled nodes to dll.");
       }
-      else {
-        std::vector<NodeComputeInfo> node_compute_funcs;
-        ORT_RETURN_IF_ERROR(provider->Compile(nodes_to_compile, node_compute_funcs));
+
+      if (fusion_style == IExecutionProvider::FusionStyle::Function) {
+        // Create a Function based node where the fused nodes have a new Graph instance.
+
+        if (export_dll) {
+          std::string dll_path;
+          ORT_RETURN_IF_ERROR(provider->Compile(nodes_to_compile, dll_path));
+          for (auto* node : nodes_to_compile) {
+            ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(node->Name(), dll_path));
+          }
+        } else {
+          ORT_RETURN_IF_ERROR(provider->Compile(nodes_to_compile, node_compute_funcs));
+          if (node_compute_funcs.size() != nodes_to_compile.size()) {
+            return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, type, " did not return correct number of compiled functions");
+          }
+
+          for (size_t j = 0; j < nodes_to_compile.size(); j++) {
+            ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(nodes_to_compile[j]->Name(), std::move(node_compute_funcs[j])));
+          }
+        }
+
+        for (auto* node : nodes_to_compile) {
+          //prepare the func kernel
+          KernelDefBuilder builder;
+          BuildFusedKernelDef(builder, *node);
+          ORT_RETURN_IF_ERROR(fused_kernel_registry->Register(builder,
+                                                              static_cast<KernelCreatePtrFn>(
+                                                                  [](const OpKernelInfo& info) -> OpKernel* {
+                                                                    return new FunctionKernel(info);
+                                                                  })));
+        }
+
+      } else {
+        // storage for the GraphViewer for each IndexedSubGraph
+        std::vector<std::unique_ptr<GraphViewer>> viewers;
+        viewers.reserve(nodes_to_compile.size());
+        std::vector<IExecutionProvider::FusedNodeAndGraph> nodes_and_viewers;
+
+        assert(std::count_if(capabilities.cbegin(), capabilities.cend(),
+                             [](const std::unique_ptr<ComputeCapability>& entry) {
+                               return entry != nullptr;
+                             }) == static_cast<ptrdiff_t>(nodes_to_compile.size()));
+
+        auto cur_capability = std::find_if(capabilities.cbegin(), capabilities.cend(),
+                                           [](const std::unique_ptr<ComputeCapability>& entry) {
+                                             return entry != nullptr;
+                                           });
+
+        for (auto* node : nodes_to_compile) {
+          ORT_ENFORCE(cur_capability != capabilities.cend() && *cur_capability != nullptr,
+                      "Internal error. Mismatch between number of fused nodes and compute capabilities instances.");
+
+          viewers.push_back(onnxruntime::make_unique<GraphViewer>(graph, *(*cur_capability)->sub_graph));
+          nodes_and_viewers.push_back(IExecutionProvider::FusedNodeAndGraph{*node, *viewers.back()});
+
+          // create the func kernel for the name in the MetaDef. this is also the node name and that name that will
+          // used as the key in the FuncManager entry. We need the registry to own the KernelCreateInfo that is
+          // used by SessionState
+          KernelDefBuilder builder;
+          BuildFusedKernelDef(builder, *(*cur_capability)->sub_graph->GetMetaDef(), type);
+          ORT_RETURN_IF_ERROR(fused_kernel_registry->Register(builder,
+                                                              static_cast<KernelCreatePtrFn>(
+                                                                  [](const OpKernelInfo& info) -> OpKernel* {
+                                                                    return new FunctionKernel(info);
+                                                                  })));
+
+          ++cur_capability;
+        }
+
+        assert(cur_capability == capabilities.cend());
+
+        ORT_RETURN_IF_ERROR(provider->Compile(nodes_and_viewers, node_compute_funcs));
         if (node_compute_funcs.size() != nodes_to_compile.size()) {
           return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, type, " did not return correct number of compiled functions");
         }
@@ -240,20 +320,6 @@ Status GraphPartitioner::PartitionOnnxFormatModel(Graph& graph, bool export_dll,
         for (size_t j = 0; j < nodes_to_compile.size(); j++) {
           ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(nodes_to_compile[j]->Name(), std::move(node_compute_funcs[j])));
         }
-      }
-
-    TODO: Validate if we actually need to register a kernel. Given PlaceNode generates a unique name for the
-      // fused node it seems like nothing else will match this, and instead SessionState can just fallback to
-      // lookup in the function manager if there's no registered kernel.
-      for (auto* node : nodes_to_compile) {
-        //prepare the func kernel
-        KernelDefBuilder builder;
-        BuildFusedKernelDef(builder, *node);
-        ORT_RETURN_IF_ERROR(fused_kernel_registry->Register(builder,
-                                                            static_cast<KernelCreatePtrFn>(
-                                                                [](const OpKernelInfo& info) -> OpKernel* {
-                                                                  return new FunctionKernel(info);
-                                                                })));
       }
     }
   }
@@ -286,8 +352,11 @@ Status GraphPartitioner::PartitionOnnxFormatModel(Graph& graph, bool export_dll,
 // Simplified partitioning where custom EPs may produce compiled nodes.
 // EPs with static kernels do not need to be processed as their kernels are matched via hash information serialized
 // as part of the ORT format model.
-Status GraphPartitioner::PartitionOrtFormatModel(Graph& graph, bool /*export_dll*/, FuncManager& func_mgr) const {
+Status GraphPartitioner::PartitionOrtFormatModel(
+    Graph& graph, bool /*export_dll*/, FuncManager& func_mgr,
+    std::unordered_map<std::string, uint64_t>& compiled_kernel_hashes) const {
   GraphViewer graph_viewer(graph);
+  std::shared_ptr<KernelRegistry> fused_kernel_registry = std::make_shared<KernelRegistry>();
 
   for (auto& provider : providers_) {
     const std::string& type = provider->Type();
@@ -300,7 +369,7 @@ Status GraphPartitioner::PartitionOrtFormatModel(Graph& graph, bool /*export_dll
     std::vector<std::unique_ptr<ComputeCapability>> capabilities =
         provider->GetCapability(graph_viewer, kernel_registry_mgr_.GetKernelRegistriesByProviderType(type));
 
-    std::vector<IExecutionProvider::FusedNodeAndGraph> fused_nodes;
+    std::vector<IExecutionProvider::FusedNodeAndGraph> nodes_and_viewers;
 
     int count = 0;
 
@@ -318,10 +387,6 @@ Status GraphPartitioner::PartitionOrtFormatModel(Graph& graph, bool /*export_dll
         continue;
       }
 
-      // TODO: Create a variant of FuseSubGraph where the don't pass in the ownership of ComputeCapability
-      // TODO: Create struct with Node and GraphViewer to call Compile with
-      //
-
       std::ostringstream oss;
       oss << type << "_" << metadef->name << "_" << count++;
       std::string node_name = oss.str();
@@ -329,29 +394,53 @@ Status GraphPartitioner::PartitionOrtFormatModel(Graph& graph, bool /*export_dll
       fused_node.SetExecutionProviderType(type);
 
       // create filtered graph viewer for this set of nodes
+      //
       // TODO: Could avoid the topological sort in the GraphViewer ctor by constructing from an existing
       // GraphViewer instance instead of the Graph (copying the topological order instead of recalculating).
       viewers.push_back(onnxruntime::make_unique<GraphViewer>(graph, indexed_sub_graph));
-      fused_nodes.push_back(IExecutionProvider::FusedNodeAndGraph{fused_node, *viewers.back()});
+      nodes_and_viewers.push_back(IExecutionProvider::FusedNodeAndGraph{fused_node, *viewers.back()});
+
+      // create the func kernel for the name in the MetaDef. this is also the node name, and that name that will
+      // used as the key in the FuncManager entry. We need the registry to own the KernelCreateInfo that is
+      // used by SessionState
+      assert(metadef->name == fused_node.Name());
+
+      KernelDefBuilder builder;
+      BuildFusedKernelDef(builder, *metadef, type);
+      auto kernel_def = builder.Build();
+
+      // save hash so SessionState can find the kernel
+      compiled_kernel_hashes.insert({fused_node.Name(), kernel_def->GetHash()});
+
+      ORT_RETURN_IF_ERROR(fused_kernel_registry->Register(
+          KernelCreateInfo(std::move(kernel_def), static_cast<KernelCreatePtrFn>(
+                                                      [](const OpKernelInfo& info) -> OpKernel* {
+                                                        return new FunctionKernel(info);
+                                                      }))));
     }
 
     std::vector<NodeComputeInfo> node_compute_funcs;
-    ORT_RETURN_IF_ERROR(provider->Compile(fused_nodes, node_compute_funcs));
+    ORT_RETURN_IF_ERROR(provider->Compile(nodes_and_viewers, node_compute_funcs));
 
-    if (node_compute_funcs.size() != fused_nodes.size()) {
+    if (node_compute_funcs.size() != nodes_and_viewers.size()) {
       return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, type, " did not return correct number of compiled functions");
     }
 
-    for (size_t j = 0; j < fused_nodes.size(); j++) {
-      ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(fused_nodes[j].fused_node.get().Name(),
+    for (size_t j = 0; j < nodes_and_viewers.size(); j++) {
+      ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(nodes_and_viewers[j].fused_node.get().Name(),
                                                std::move(node_compute_funcs[j])));
     }
+  }
+
+  if (!fused_kernel_registry->IsEmpty()) {
+    kernel_registry_mgr_.RegisterKernelRegistry(fused_kernel_registry);
   }
 
   return Status::OK();
 }
 
-Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& func_mgr) const {
+Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& func_mgr, Mode mode,
+                                   std::unordered_map<std::string, uint64_t>* compiled_kernel_hashes) const {
   // It is a greedy partitioning algorithm per provider preferences user provided when calling ONNX RUNTIME right now.
   // 1. Execution providers' capabilities are checked one by one.
   // 2. All sub-graphs that an execution provider returns will be assigned to it if it's not assigned yet.
@@ -381,15 +470,16 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
 
   GraphViewer graph_viewer(graph);
 
-  if (mode_ == Mode::kStandard || mode_ == Mode::kAssignOnly) {
+  if (mode == Mode::kStandard || mode == Mode::kAssignOnly) {
 #if !defined(ORT_MINIMAL_BUILD)
-    ORT_RETURN_IF_ERROR(PartitionOnnxFormatModel(graph, export_dll, func_mgr));
+    ORT_RETURN_IF_ERROR(PartitionOnnxFormatModel(graph, export_dll, func_mgr, mode));
 #else
     ORT_THROW("Not supported in this build.");
 #endif
   } else {
-    assert(mode_ == Mode::kOrtFormatLoad);
-    ORT_RETURN_IF_ERROR(PartitionOrtFormatModel(graph, export_dll, func_mgr));
+    ORT_ENFORCE(compiled_kernel_hashes != nullptr, "Compiled kernel hashes were not provided");
+
+    ORT_RETURN_IF_ERROR(PartitionOrtFormatModel(graph, export_dll, func_mgr, *compiled_kernel_hashes));
   }
 
   return Status::OK();

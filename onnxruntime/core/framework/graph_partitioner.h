@@ -22,11 +22,9 @@ class GraphPartitioner {
   };
 
   //The order of providers represents the user preference.
-  GraphPartitioner(KernelRegistryManager& kernel_registry_mgr, const ExecutionProviders& providers,
-                   Mode mode = Mode::kStandard)
+  GraphPartitioner(KernelRegistryManager& kernel_registry_mgr, const ExecutionProviders& providers)
       : kernel_registry_mgr_(kernel_registry_mgr),
-        providers_(providers),
-        mode_{mode} {
+        providers_(providers) {
     // TODO: What are the steps here:
     // Full build - want to know if we're generating an ORT format model
     // Full and minimal build - when loading from ORT format model, call GetCapability/Compile with GraphViewer
@@ -37,17 +35,20 @@ class GraphPartitioner {
     // GetCapability on CPU.
   }
 
-  Status Partition(Graph& graph, bool export_dll, FuncManager& func_mgr) const;
+  // Run partitioning. Provide compiled_kernel_hashes if mode is kOrtFormatLoad.
+  Status Partition(Graph& graph, bool export_dll, FuncManager& func_mgr,
+                   Mode mode = Mode::kStandard,
+                   std::unordered_map<std::string, uint64_t>* compiled_kernel_hashes = nullptr) const;
 
  private:
   ORT_DISALLOW_COPY_ASSIGNMENT_AND_MOVE(GraphPartitioner);
 
   Status InlineNodes(Graph& graph, bool export_dll, FuncManager& func_mgr) const;
-  Status PartitionOnnxFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr) const;
-  Status PartitionOrtFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr) const;
+  Status PartitionOnnxFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr, Mode mode) const;
+  Status PartitionOrtFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr,
+                                 std::unordered_map<std::string, uint64_t>& compiled_kernel_hashes) const;
 
   KernelRegistryManager& kernel_registry_mgr_;
   const ExecutionProviders& providers_;
-  Mode mode_;
 };
 }  // namespace onnxruntime
