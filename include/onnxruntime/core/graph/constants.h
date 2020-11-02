@@ -36,6 +36,7 @@ constexpr const char* kDmlExecutionProvider = "DmlExecutionProvider";
 constexpr const char* kMIGraphXExecutionProvider = "MIGraphXExecutionProvider";
 constexpr const char* kAclExecutionProvider = "ACLExecutionProvider";
 constexpr const char* kArmNNExecutionProvider = "ArmNNExecutionProvider";
+constexpr const char* kRocmExecutionProvider = "ROCMExecutionProvider";
 
 // internal test
 constexpr const char* kInternalTestingExecutionProvider = "InternalTestingExecutionProvider";
@@ -81,5 +82,9 @@ constexpr const char* providers_available[] = {
 #ifdef USE_ARMNN
     kArmNNExecutionProvider,
 #endif
+#ifdef USE_ROCM
+  kRocmExecutionProvider,
+#endif
 };
+
 }  // namespace onnxruntime
