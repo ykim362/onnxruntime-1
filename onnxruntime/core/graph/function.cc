@@ -423,9 +423,11 @@ const ONNX_NAMESPACE::FunctionProto* FunctionImpl::GetFuncProto() const {
 
 ViewerFunctionImpl::ViewerFunctionImpl(const onnxruntime::Graph& graph,
                                        const IndexedSubGraph& nodes_to_fuse,
-                                       const logging::Logger& logger) {
+                                       const logging::Logger& /*logger*/) {
   op_schema_ = CreateSchema(graph, nodes_to_fuse);
 }
+
+ViewerFunctionImpl::~ViewerFunctionImpl() = default;
 
 std::unique_ptr<Function> MakeFunction(const onnxruntime::Graph& graph,
                                        std::unique_ptr<IndexedSubGraph> customized_func,

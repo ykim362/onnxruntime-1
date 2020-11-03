@@ -136,7 +136,7 @@ static Node* PlaceNode(Graph& graph, std::unique_ptr<IndexedSubGraph>& capabilit
           // create a fused node without copying everything to a Function body. The IndexedSubGraph will be passed
           // through to Compile via a filtered GraphViewer so we don't transfer ownership of it here.
           release_capability = false;
-          fused_node = &graph.CreateFusedSubGraphNode(*capability, node_name);
+          fused_node = &graph.BeginFuseSubGraph(*capability, node_name);
         }
 
         fused_node->SetExecutionProviderType(provider_type);
@@ -403,7 +403,7 @@ Status GraphPartitioner::PartitionOrtFormatModel(
       oss << type << "_" << metadef->name << "_" << count++;
       std::string node_name = oss.str();
 
-      Node& fused_node = graph.CreateFusedSubGraphNode(indexed_sub_graph, node_name);
+      Node& fused_node = graph.BeginFuseSubGraph(indexed_sub_graph, node_name);
       fused_node.SetExecutionProviderType(type);
 
       // create filtered graph viewer for this set of nodes

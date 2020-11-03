@@ -3,7 +3,7 @@
 
 #include "internal_testing_execution_provider.h"
 
-// #include "core/framework/allocatormgr.h"
+#include "core/framework/allocatormgr.h"
 #include "core/framework/compute_capability.h"
 #include "core/framework/feeds_fetches_manager.h"
 #include "core/framework/op_kernel_context_internal.h"
@@ -19,20 +19,24 @@ constexpr const char* INTERNAL_TESTING_EP = "InternalTestingEP";
 InternalTestingExecutionProvider::InternalTestingExecutionProvider(const std::vector<std::string>& ops)
     : IExecutionProvider{onnxruntime::kInternalTestingExecutionProvider},
       ops_{ops.begin(), ops.end()} {
-  // Testing if we can just use the default CPU EP Allocator without adding anything here
-  // AllocatorCreationInfo device_info(
-  //     [](int) {
-  //       return onnxruntime::make_unique<CPUAllocator>(OrtMemoryInfo(INTERNAL_TEST_EP, OrtAllocatorType::OrtDeviceAllocator));
-  //     });
+  // TODO: Allocation planner calls GetAllocator for the individual EP. It would be better if it goes through
+  // the session state to get the allocator so it's per-device (or for the allocation planner to try the EP first
+  // and fall back to using session state next by passing in a functor it can use to call SessionState::GetAllocator).
 
-  // InsertAllocator(CreateAllocator(device_info));
+  AllocatorCreationInfo device_info(
+      [](int) {
+        return onnxruntime::make_unique<CPUAllocator>(OrtMemoryInfo(INTERNAL_TESTING_EP,
+                                                                    OrtAllocatorType::OrtDeviceAllocator));
+      });
+
+  InsertAllocator(CreateAllocator(device_info));
 
   // AllocatorCreationInfo cpu_memory_info(
   //     [](int) {
   //       return onnxruntime::make_unique<CPUAllocator>(
-  //           OrtMemoryInfo(INTERNAL_TEST_EP, OrtAllocatorType::OrtDeviceAllocator, OrtDevice(), 0, OrtMemTypeCPUOutput));
+  //           OrtMemoryInfo(INTERNAL_TESTING_EP, OrtAllocatorType::OrtDeviceAllocator, OrtDevice(), 0,
+  //                         OrtMemTypeCPUOutput));
   //     });
-
   // InsertAllocator(CreateAllocator(cpu_memory_info));
 }
 

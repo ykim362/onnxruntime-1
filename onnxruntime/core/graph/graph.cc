@@ -3352,16 +3352,21 @@ Node& Graph::CreateFusedSubGraphNode(const IndexedSubGraph& sub_graph, const std
 
   fused_node.SetNodeType(Node::Type::Fused);
 
-#if !defined(ORT_MINIMAL_BUILD)
-
-#endif
-
   return fused_node;
 }
 
 Node& Graph::BeginFuseSubGraph(const IndexedSubGraph& sub_graph, const std::string& fused_node_name) {
   Node& node = CreateFusedSubGraphNode(sub_graph, fused_node_name);
-  auto func = onnxruntime::make_unique<ViewerFunctionImpl>(*this, , logger);
+
+#if !defined(ORT_MINIMAL_BUILD)
+  // if this is a full build create the lightweight Function implementation that provides the schema so that
+  // kernel lookup works as per usual.
+  auto func = onnxruntime::make_unique<ViewerFunctionImpl>(*this, sub_graph, logger_);
+  function_container_.push_back(std::move(func));
+  node.SetFunctionBody(*function_container_.back());
+#endif
+
+  return node;
 }
 
 void Graph::FinalizeFuseSubGraph(const IndexedSubGraph& sub_graph, Node& fused_node) {
@@ -3432,8 +3437,6 @@ void Graph::FinalizeFuseSubGraph(const IndexedSubGraph& sub_graph, Node& fused_n
 #endif
 
 #if !defined(ORT_MINIMAL_BUILD)
-//return onnxruntime::make_unique<SchemaOnlyFunctionImpl>(graph, std::move(customized_func), logger);
-
 Node& Graph::FuseSubGraph(std::unique_ptr<IndexedSubGraph> sub_graph,
                           const std::string& fused_node_name) {
   Node& fused_node = CreateFusedSubGraphNode(*sub_graph, fused_node_name);

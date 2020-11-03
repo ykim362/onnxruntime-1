@@ -43,7 +43,8 @@ class FunctionImpl final : public Function {
   ONNX_NAMESPACE::FunctionProto onnx_func_proto_;
 };
 
-// Function that uses a GraphViewer so does not need to build a new Model
+// Function that uses a GraphViewer so does not need to build a new Model. We still need the OpSchema to be available
+// though so just create that.
 class ViewerFunctionImpl final : public Function {
  public:
   ViewerFunctionImpl(const onnxruntime::Graph& graph,
