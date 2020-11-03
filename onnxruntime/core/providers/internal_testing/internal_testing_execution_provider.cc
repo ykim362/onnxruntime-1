@@ -234,10 +234,14 @@ common::Status InternalTestingExecutionProvider::Compile(const std::vector<Fused
           return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "Unknown output shapes are not supported");
         }
 
-        const TensorShape shape = utils::GetTensorShapeFromTensorShapeProto(*shape_proto);
+        TensorShape shape = utils::GetTensorShapeFromTensorShapeProto(*shape_proto);
         if (shape.Size() < 0) {
-          return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "Unknown output shapes are not supported. Output '",
-                                 outputs[i]->Name(), "' has shape ", shape);
+          // arbitrarily set any unknown dim to 1
+          for (size_t idx = 0, end = shape.NumDimensions(); idx < end; ++idx) {
+            if (shape[idx] == -1) {
+              shape[idx] = 1;
+            }
+          }
         }
 
         // create the output_tensor.
