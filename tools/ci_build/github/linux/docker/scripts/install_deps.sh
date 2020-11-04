@@ -112,7 +112,10 @@ ${PYTHON_EXE} -m pip install -r ${0/%install_deps\.sh/requirements\.txt}
 if [ $DEVICE_TYPE = "gpu" ]; then
     if [[ $BUILD_EXTR_PAR = *--enable_training* ]]; then
       ${PYTHON_EXE} -m pip install -r ${0/%install_deps.sh/training\/requirements.txt}
-      source ${0/%install_deps.sh/install_openmpi.sh}
+
+      if [[ $BUILD_EXTR_PAR = *--enable_training_python_frontend_e2e_tests* || $BUILD_EXTR_PAR = *enable_training_pipeline_e2e_tests* ]]; then
+        source ${0/%install_deps.sh/install_openmpi.sh}
+      fi
     fi
 fi
 
