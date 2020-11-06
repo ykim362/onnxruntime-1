@@ -11,6 +11,7 @@
 namespace onnxruntime {
 
 class ExecutionProviders;
+class KernelRegistry;
 class KernelRegistryManager;
 
 class GraphPartitioner {
@@ -43,9 +44,10 @@ class GraphPartitioner {
  private:
   ORT_DISALLOW_COPY_ASSIGNMENT_AND_MOVE(GraphPartitioner);
 
-  Status InlineNodes(Graph& graph, bool export_dll, FuncManager& func_mgr) const;
-  Status PartitionOnnxFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr, Mode mode) const;
-  Status PartitionOrtFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr,
+  Status PartitionOnnxFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr,
+                                  KernelRegistry& fused_kernel_registry, Mode mode) const;
+
+  Status PartitionOrtFormatModel(Graph& graph, FuncManager& func_mgr, KernelRegistry& fused_kernel_registry,
                                  std::unordered_map<std::string, uint64_t>& compiled_kernel_hashes) const;
 
   KernelRegistryManager& kernel_registry_mgr_;

@@ -26,9 +26,6 @@ class Function {
 
   /** Gets the Graph instance for the Function body subgraph. */
   virtual const onnxruntime::Graph& Body() const = 0;
-
-  /** Gets the IndexedSubGraph for the Function. */
-  virtual const IndexedSubGraph& GetIndexedSubGraph() const = 0;
 };
 
 /** 
@@ -39,6 +36,6 @@ Create a new Function instance.
                         implementation will be returned that has an OpSchema but no Body or IndexedSubGraph.
 */
 std::unique_ptr<Function> MakeFunction(const onnxruntime::Graph& graph,
-                                       std::unique_ptr<IndexedSubGraph> nodes_to_fuse,
+                                       const IndexedSubGraph& nodes_to_fuse,
                                        const logging::Logger& logger);
 }  // namespace onnxruntime

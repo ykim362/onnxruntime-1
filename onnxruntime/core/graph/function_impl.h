@@ -17,7 +17,7 @@ namespace onnxruntime {
 class FunctionImpl final : public Function {
  public:
   FunctionImpl(const onnxruntime::Graph& graph,
-               std::unique_ptr<IndexedSubGraph> customized_func,
+               const IndexedSubGraph& nodes_to_fuse,
                const logging::Logger& logger);
 
   FunctionImpl(const onnxruntime::Graph& graph,
@@ -31,13 +31,8 @@ class FunctionImpl final : public Function {
 
   const onnxruntime::Graph& Body() const override;
 
-  const IndexedSubGraph& GetIndexedSubGraph() const override;
-
-  const ONNX_NAMESPACE::FunctionProto* GetFuncProto() const;
-
  private:
   const onnxruntime::Graph* const parent_graph_;
-  std::unique_ptr<IndexedSubGraph> customized_func_body_;
   std::unique_ptr<ONNX_NAMESPACE::OpSchema> op_schema_;
   onnxruntime::Model body_;
   ONNX_NAMESPACE::FunctionProto onnx_func_proto_;
@@ -58,17 +53,8 @@ class ViewerFunctionImpl final : public Function {
 
   const onnxruntime::Graph& Body() const override { ORT_THROW("Not supported"); }
 
-  const IndexedSubGraph& GetIndexedSubGraph() const override { ORT_THROW("Not supported"); }
-
-  /*
-  const ONNX_NAMESPACE::FunctionProto* GetFuncProto() const;
-  */
  private:
-  //const onnxruntime::Graph* const parent_graph_;
-  //std::unique_ptr<IndexedSubGraph> customized_func_body_;
   std::unique_ptr<ONNX_NAMESPACE::OpSchema> op_schema_;
-  //onnxruntime::Model body_;
-  //ONNX_NAMESPACE::FunctionProto onnx_func_proto_;
 };
 
 }  // namespace onnxruntime

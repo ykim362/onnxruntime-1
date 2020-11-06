@@ -171,18 +171,17 @@ static std::unique_ptr<ONNX_NAMESPACE::OpSchema> CreateSchema(const Graph& graph
 }
 
 FunctionImpl::FunctionImpl(const onnxruntime::Graph& graph,
-                           std::unique_ptr<IndexedSubGraph> customized_func,
+                           const IndexedSubGraph& nodes_to_fuse,
                            const logging::Logger& logger)
     : parent_graph_(&graph),
       body_("fused_function_subgraph", false, onnxruntime::ModelMetaData(),
             graph.ModelPath().ToPathString(),
             IOnnxRuntimeOpSchemaRegistryList({graph.GetSchemaRegistry()}),
             graph.DomainToVersionMap(), {}, logger) {
-  customized_func_body_ = std::move(customized_func);
   auto& function_body_graph = body_.MainGraph();
 
-  auto* meta_def = customized_func_body_->GetMetaDef();
-  op_schema_ = CreateSchema(graph, *customized_func_body_);
+  auto* meta_def = nodes_to_fuse.GetMetaDef();
+  op_schema_ = CreateSchema(graph, nodes_to_fuse);
 
   int i = 0;
   std::vector<const NodeArg*> function_body_graph_inputs;
@@ -206,10 +205,11 @@ FunctionImpl::FunctionImpl(const onnxruntime::Graph& graph,
 
   function_body_graph.SetInputs(function_body_graph_inputs);
   function_body_graph.SetOutputs(function_body_graph_outputs);
+
   //Add node and node args
   //TODO: for better performance, we could try to transfer the nodes in parent graph to sub-graph directly,
   //instead of create new nodes.
-  for (auto& node_index : customized_func_body_->nodes) {
+  for (auto& node_index : nodes_to_fuse.nodes) {
     auto node = parent_graph_->GetNode(node_index);
     std::vector<onnxruntime::NodeArg*> inputs;
     std::vector<onnxruntime::NodeArg*> outputs;
@@ -302,10 +302,7 @@ FunctionImpl::FunctionImpl(const onnxruntime::Graph& graph,
     op_schema_->TypeAndShapeInferenceFunction(
         [this](ONNX_NAMESPACE::InferenceContext& ctx) {
           auto schema_registry = ONNX_NAMESPACE::OpSchemaRegistry::Instance();
-          const ONNX_NAMESPACE::FunctionProto* func_ptr = this->GetFuncProto();
-          if (nullptr != func_ptr) {
-            ONNX_NAMESPACE::shape_inference::InferShapeForFunctionNode(func_ptr, schema_registry, ctx);
-          }
+          ONNX_NAMESPACE::shape_inference::InferShapeForFunctionNode(&onnx_func_proto_, schema_registry, ctx);
         });
   } else {
     op_schema_->TypeAndShapeInferenceFunction(cached_op_schema->GetTypeAndShapeInferenceFunction());
@@ -413,14 +410,6 @@ const onnxruntime::Graph& FunctionImpl::Body() const {
   return body_.MainGraph();
 }
 
-const IndexedSubGraph& FunctionImpl::GetIndexedSubGraph() const {
-  return *customized_func_body_;
-}
-
-const ONNX_NAMESPACE::FunctionProto* FunctionImpl::GetFuncProto() const {
-  return &onnx_func_proto_;
-}
-
 ViewerFunctionImpl::ViewerFunctionImpl(const onnxruntime::Graph& graph,
                                        const IndexedSubGraph& nodes_to_fuse,
                                        const logging::Logger& /*logger*/) {
@@ -430,8 +419,8 @@ ViewerFunctionImpl::ViewerFunctionImpl(const onnxruntime::Graph& graph,
 ViewerFunctionImpl::~ViewerFunctionImpl() = default;
 
 std::unique_ptr<Function> MakeFunction(const onnxruntime::Graph& graph,
-                                       std::unique_ptr<IndexedSubGraph> customized_func,
+                                       const IndexedSubGraph& nodes_to_fuse,
                                        const logging::Logger& logger) {
-  return onnxruntime::make_unique<FunctionImpl>(graph, std::move(customized_func), logger);
+  return onnxruntime::make_unique<FunctionImpl>(graph, nodes_to_fuse, logger);
 }
 }  // namespace onnxruntime

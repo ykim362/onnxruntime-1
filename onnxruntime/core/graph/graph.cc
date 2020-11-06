@@ -3437,12 +3437,12 @@ void Graph::FinalizeFuseSubGraph(const IndexedSubGraph& sub_graph, Node& fused_n
 #endif
 
 #if !defined(ORT_MINIMAL_BUILD)
-Node& Graph::FuseSubGraph(std::unique_ptr<IndexedSubGraph> sub_graph,
+Node& Graph::FuseSubGraph(const IndexedSubGraph& sub_graph,
                           const std::string& fused_node_name) {
-  Node& fused_node = CreateFusedSubGraphNode(*sub_graph, fused_node_name);
-  FinalizeFuseSubGraph(*sub_graph, fused_node);
+  Node& fused_node = CreateFusedSubGraphNode(sub_graph, fused_node_name);
+  FinalizeFuseSubGraph(sub_graph, fused_node);
 
-  function_container_.emplace_back(MakeFunction(*this, std::move(sub_graph), logger_));
+  function_container_.emplace_back(MakeFunction(*this, sub_graph, logger_));
   fused_node.SetFunctionBody(*function_container_.back());
 
   return fused_node;
