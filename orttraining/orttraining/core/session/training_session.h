@@ -23,6 +23,7 @@ class TrainingSession : public InferenceSession {
                              std::vector<std::pair<size_t /*InputIndex*/, float /*value*/>>>
       ImmutableWeights;
 
+  ~TrainingSession();
   TrainingSession(const SessionOptions& session_options, const Environment& env)
       : InferenceSession(session_options, env) {  std::cout << "[training_session.h] Call ctor TrainingSession" << std::endl; }
 
