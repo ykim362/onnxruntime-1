@@ -30,14 +30,6 @@ InternalTestingExecutionProvider::InternalTestingExecutionProvider(const std::ve
       });
 
   InsertAllocator(CreateAllocator(device_info));
-
-  // AllocatorCreationInfo cpu_memory_info(
-  //     [](int) {
-  //       return onnxruntime::make_unique<CPUAllocator>(
-  //           OrtMemoryInfo(INTERNAL_TESTING_EP, OrtAllocatorType::OrtDeviceAllocator, OrtDevice(), 0,
-  //                         OrtMemTypeCPUOutput));
-  //     });
-  // InsertAllocator(CreateAllocator(cpu_memory_info));
 }
 
 InternalTestingExecutionProvider::~InternalTestingExecutionProvider() {}
