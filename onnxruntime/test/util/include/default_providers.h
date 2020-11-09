@@ -23,7 +23,7 @@ std::unique_ptr<IExecutionProvider> DefaultRocmExecutionProvider();
 
 // internal test EP
 std::unique_ptr<IExecutionProvider> DefaultInternalTestingExecutionProvider(
-    const std::vector<std::string>& supported_ops);
+    const std::unordered_set<std::string>& supported_ops);
 
 }  // namespace test
 }  // namespace onnxruntime

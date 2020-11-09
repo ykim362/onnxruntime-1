@@ -8,12 +8,12 @@ using namespace onnxruntime;
 namespace onnxruntime {
 
 struct InternalTestingProviderFactory : IExecutionProviderFactory {
-  InternalTestingProviderFactory(const std::vector<std::string>& ops) : ops_(ops) {}
+  InternalTestingProviderFactory(const std::unordered_set<std::string>& ops) : ops_(ops) {}
   ~InternalTestingProviderFactory() override {}
 
   std::unique_ptr<IExecutionProvider> CreateProvider() override;
 
-  const std::vector<std::string> ops_;
+  const std::unordered_set<std::string> ops_;
 };
 
 std::unique_ptr<IExecutionProvider> InternalTestingProviderFactory::CreateProvider() {
@@ -21,7 +21,7 @@ std::unique_ptr<IExecutionProvider> InternalTestingProviderFactory::CreateProvid
 }
 
 std::shared_ptr<IExecutionProviderFactory> CreateExecutionProviderFactory_InternalTesting(
-    const std::vector<std::string>& ops) {
+    const std::unordered_set<std::string>& ops) {
   return std::make_shared<onnxruntime::InternalTestingProviderFactory>(ops);
 }
 }  // namespace onnxruntime

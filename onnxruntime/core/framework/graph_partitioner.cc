@@ -138,6 +138,7 @@ static Node* PlaceNode(Graph& graph, const IndexedSubGraph& capability,
         fused_node->SetExecutionProviderType(provider_type);
 
         // searching in kernel registries, if no kernel registered for the fused_node, use compile approach
+        // TODO: Shouldn't we delete the fused_node if there's a match in KernelRegistryManager?
         if (!KernelRegistryManager::HasImplementationOf(kernel_registry_mgr, *fused_node, provider_type)) {
           result = fused_node;
         }
@@ -410,11 +411,7 @@ static Status PartitionOrtFormatModelImpl(Graph& graph, FuncManager& func_mgr,
     const IndexedSubGraph& indexed_sub_graph = *capability->sub_graph;
     const IndexedSubGraph::MetaDef* metadef = indexed_sub_graph.GetMetaDef();
     if (!metadef) {
-      // this could happen if we enable another non-ORT EP that has statically assigned kernels.
-      // we could add this EP to the skip list above to avoid the unnecessary call to GetCapability as we would
-      // have already saved the kernel hashes in the serialized session state.
-      // we really should be able to return here, but in case an EP returns a mix of static and compiled kernels in
-      // the future just continue.
+      // Static kernel - use the node assignment and kernel hash that was saved in the ORT format model
       continue;
     }
 

@@ -57,9 +57,9 @@ class LoggingManager;
   */
 struct ModelMetadata {
   ModelMetadata() = default;
-  ModelMetadata(const ModelMetadata& other)
-      : producer_name(other.producer_name), graph_name(other.graph_name), domain(other.domain), description(other.description), version(other.version), custom_metadata_map(other.custom_metadata_map) {
-  }
+  ModelMetadata(const ModelMetadata& other) = default;
+  //    : producer_name(other.producer_name), graph_name(other.graph_name), domain(other.domain), description(other.description), version(other.version), custom_metadata_map(other.custom_metadata_map) {
+  //}
   ~ModelMetadata() = default;
   ModelMetadata& operator=(const ModelMetadata&) = delete;
 

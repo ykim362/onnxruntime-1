@@ -1156,6 +1156,7 @@ common::Status InferenceSession::Initialize() {
     // Register 2nd registries into KernelRegistryManager.
     ORT_RETURN_IF_ERROR_SESSIONID_(kernel_registry_manager_.RegisterKernels(execution_providers_));
 
+    bool loading_ort_format = !ort_format_model_bytes_.empty();
     bool saving_model = !session_options_.optimized_model_filepath.empty();
     bool saving_ort_format = false;
     if (saving_model) {
@@ -1167,9 +1168,7 @@ common::Status InferenceSession::Initialize() {
     }
 
 #if !defined(ORT_MINIMAL_BUILD)
-    // internal hook for testing loading of ORT format model in full build that does not use the full partitioning
-    bool skip_transform = !session_options_.GetConfigOrDefault("session.skip_transform", "").empty();
-    if (!skip_transform) {
+    if (!loading_ort_format) {
       // add predefined transformers
       AddPredefinedTransformers(graph_transformation_mgr_, session_options_.graph_optimization_level,
                                 transformers_to_enable_);
@@ -1189,8 +1188,8 @@ common::Status InferenceSession::Initialize() {
     } else
 #endif  // !defined(ORT_MINIMAL_BUILD)
     {
-      // for a minimal build (or testing that behavior) nodes are already partitioned, but a custom EP may compile
-      // some at runtime. run the partitioning to allow that to happen.
+      // nodes are already partitioned, but a custom EP may compile some at runtime.
+      // run the partitioning to allow that to happen.
       //
       // We always have the CPU EP, so only need to run this if some other EP is enabled
       if (execution_providers_.NumProviders() > 1) {
@@ -1199,22 +1198,18 @@ common::Status InferenceSession::Initialize() {
       }
     }
 
-    // we only want to use the serialized session state in a minimal build.
-    // in a full build, even if we loaded from an ORT format model, optimizers may have run and changed the
-    // graph, which would result in it no longer matching the saved session state.
-    // as it's a full build we can create the SessionState as per usual using kernel lookups, so we can take the safe
-    // option and ignore the serialized session state.
-    const experimental::fbs::SessionState* serialized_session_state = nullptr;
-#if defined(ORT_MINIMAL_BUILD)
-    serialized_session_state = fbs::GetInferenceSession(ort_format_model_bytes_.data())->session_state();
-#endif
+    const experimental::fbs::SessionState* serialized_session_state =
+        loading_ort_format
+            ? fbs::GetInferenceSession(ort_format_model_bytes_.data())->session_state()
+            : nullptr;
 
     ORT_RETURN_IF_ERROR_SESSIONID_(
         session_state_->FinalizeSessionState(model_location_, kernel_registry_manager_,
                                              session_options_,
                                              serialized_session_state,
                                              // need to keep the initializers if saving the optimized model
-                                             !saving_model));
+                                             !saving_model,
+                                             saving_ort_format));
 
 #if !defined(ORT_MINIMAL_BUILD)
     if (saving_model) {

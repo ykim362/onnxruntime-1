@@ -8,7 +8,7 @@
 namespace onnxruntime {
 class InternalTestingExecutionProvider : public IExecutionProvider {
  public:
-  InternalTestingExecutionProvider(const std::vector<std::string>& ops);
+  InternalTestingExecutionProvider(const std::unordered_set<std::string>& ops);
   virtual ~InternalTestingExecutionProvider();
 
   std::vector<std::unique_ptr<ComputeCapability>>

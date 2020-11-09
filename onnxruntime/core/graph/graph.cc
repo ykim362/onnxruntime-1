@@ -3421,9 +3421,9 @@ void Graph::FinalizeFuseSubGraph(const IndexedSubGraph& sub_graph, Node& fused_n
       auto dst_idx = output_edge.GetDstArgIndex();
 
       // see if this output is an output of the fused node
-      auto it = input_indexes.find(node->OutputDefs()[src_idx]->Name());
-      if (it != input_indexes.cend()) {
-        AddEdge(consumer_idx, new_node_idx, it->second, dst_idx);
+      auto it = output_indexes.find(node->OutputDefs()[src_idx]->Name());
+      if (it != output_indexes.cend()) {
+        AddEdge(new_node_idx, consumer_idx, it->second, dst_idx);
       }
 
       RemoveEdge(node_index, consumer_idx, src_idx, dst_idx);
@@ -3631,6 +3631,7 @@ Graph::Graph(const Model& owning_model,
       schema_registry_(std::make_shared<SchemaRegistryManager>()),
 #endif
       domain_to_version_(domain_to_version),
+      ir_version_(owning_model.IrVersion()),
       parent_graph_(parent_graph),
       parent_node_(parent_node),
       logger_(logger),

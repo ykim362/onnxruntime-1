@@ -16,9 +16,9 @@ namespace onnxruntime {
 
 constexpr const char* INTERNAL_TESTING_EP = "InternalTestingEP";
 
-InternalTestingExecutionProvider::InternalTestingExecutionProvider(const std::vector<std::string>& ops)
+InternalTestingExecutionProvider::InternalTestingExecutionProvider(const std::unordered_set<std::string>& ops)
     : IExecutionProvider{onnxruntime::kInternalTestingExecutionProvider},
-      ops_{ops.begin(), ops.end()} {
+      ops_{ops} {
   // TODO: Allocation planner calls GetAllocator for the individual EP. It would be better if it goes through
   // the session state to get the allocator so it's per-device (or for the allocation planner to try the EP first
   // and fall back to using session state next by passing in a functor it can use to call SessionState::GetAllocator).

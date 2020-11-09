@@ -237,7 +237,6 @@ static void DumpOrtModelAsJson(const std::string& model_uri) {
 }
 */
 
-
 TEST(OrtModelOnlyTests, SerializeToOrtFormat) {
   const std::basic_string<ORTCHAR_T> ort_file = ORT_TSTR("ort_github_issue_4031.onnx.ort");
   SaveAndCompareModels("testdata/ort_github_issue_4031.onnx", ort_file);

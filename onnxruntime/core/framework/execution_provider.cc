@@ -43,9 +43,11 @@ IExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph,
 
   return result;
 #else
+  // We have saved hashes to lookup static kernels in an ORT format model so the default behavior is to return an
+  // empty vector to leave that in place. An EP that compiles nodes can override this in a minimal build.
   ORT_UNUSED_PARAMETER(graph);
   ORT_UNUSED_PARAMETER(kernel_registries);
-  ORT_NOT_IMPLEMENTED("IExecutionProvider::GetCapability is not supported in this build.");
+  return result;
 #endif
 }
 

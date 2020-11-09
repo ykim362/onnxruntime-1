@@ -36,7 +36,7 @@ std::shared_ptr<IExecutionProviderFactory> CreateExecutionProviderFactory_ROCM(O
 
 // internal test EP
 std::shared_ptr<IExecutionProviderFactory> CreateExecutionProviderFactory_InternalTesting(
-    const std::vector<std::string>& supported_ops);
+    const std::unordered_set<std::string>& supported_ops);
 
 namespace test {
 
@@ -146,7 +146,7 @@ std::unique_ptr<IExecutionProvider> DefaultRocmExecutionProvider() {
 }
 
 std::unique_ptr<IExecutionProvider> DefaultInternalTestingExecutionProvider(
-    const std::vector<std::string>& supported_ops) {
+    const std::unordered_set<std::string>& supported_ops) {
 #ifdef USE_INTERNAL_TESTING_EP
   return CreateExecutionProviderFactory_InternalTesting(supported_ops)->CreateProvider();
 #else
