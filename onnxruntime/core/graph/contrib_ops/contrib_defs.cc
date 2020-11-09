@@ -1984,6 +1984,76 @@ with the exception that numpy default keepdims to False instead of True.)DOC")
       .FillUsing(QLinearMathDocGenerator("multiplication",
                                          "C = ((A - A_zero_point) * (B - B_zero_point)) * (A_scale * B_scale)/C_scale + C_zero_point"));
 
+  ONNX_CONTRIB_OPERATOR_SCHEMA(QuantizedGlobalAveragePool)
+      .SetDomain(kMSDomain)
+      .SinceVersion(1)
+      .SetDoc(R"DOC(
+QuantizedGlobalAveragePool consumes an input tensor X and applies Average pooling across
+the values in the same channel. This is equivalent to AveragePool with kernel size
+equal to the spatial dimension of input tensor. Input is of type uint8_t or int8_t.
+)DOC")
+      .Attr(
+          "nchw",
+          "Input layout, nchw or nhwc, 1 for nchw, 0 for nhwc.",
+          AttributeProto::INT)
+      .Input(
+          0,
+          "X",
+          "Input data tensor from the previous operator; "
+          "dimensions for image case are (N x C x H x W), "
+          "where N is the batch size, C is the number of "
+          "channels, and H and W are the height and the width "
+          "of the data. For non image case, the dimensions are "
+          "in the form of (N x C x D1 x D2 ... Dn), "
+          "where N is the batch size.",
+          "T")
+      .Output(
+          0,
+          "Y",
+          "Output data tensor from pooling across the input "
+          "tensor. The output tensor has the same rank as the input. "
+          "The first two dimensions of output shape are the same as "
+          "the input (N x C), while the other dimensions are all 1.",
+          "T")
+      .TypeConstraint(
+          "T",
+          {"tensor(uint8)", "tensor(int8)"},
+          "Constrain input and output types to singed/unsigned int8 tensors.")
+      .TypeAndShapeInferenceFunction([](ONNX_NAMESPACE::InferenceContext& ctx) {
+        propagateElemTypeFromInputToOutput(ctx, 0, 0);
+
+        int64_t nchw = ctx.getAttribute("nchw")->i();
+
+        // needs at least one input with shape.
+        if (!hasNInputShapes(ctx, 1)) {
+          return;
+        }
+
+        auto input_shape = ctx.getInputType(0)->tensor_type().shape();
+        if (input_shape.dim_size() < 2) {
+          return;
+        }
+
+        // first dim is the batch axis and the next is the number of channels.
+        size_t n_input_dims = static_cast<size_t>(input_shape.dim_size() - 2);
+
+        // (N, C, 1, 1, ..., 1) or (N, 1, 1, ..., 1, C)
+        auto output_shape =
+            ctx.getOutputType(0)->mutable_tensor_type()->mutable_shape();
+        *output_shape->add_dim() = input_shape.dim(0);
+        if (nchw) {
+          *output_shape->add_dim() = input_shape.dim(1);
+        }
+
+        for (size_t i = 0; i < n_input_dims; ++i) {
+          output_shape->add_dim()->set_dim_value(1);
+        }
+
+        if (!nchw) {
+          *output_shape->add_dim() = input_shape.dim(1);
+        }
+      });
+
   ONNX_CONTRIB_OPERATOR_SCHEMA(QLinearReduceMean)
       .SetDomain(kMSDomain)
       .SinceVersion(1)
