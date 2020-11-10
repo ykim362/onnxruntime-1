@@ -37,7 +37,7 @@ class OpKernelContextInternal : public OpKernelContext {
     }
   }
 
-  bool GetUseDeterministicCompute() const {
+  bool GetUseDeterministicCompute() const override {
     return session_state_.GetUseDeterministicCompute();
   }
 
