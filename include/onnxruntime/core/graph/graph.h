@@ -368,7 +368,9 @@ class Node {
   ProviderType GetExecutionProviderType() const noexcept { return execution_provider_type_; }
 
   /** Sets the execution ProviderType that this Node will be executed by. */
-  void SetExecutionProviderType(ProviderType execution_provider_type);
+  void SetExecutionProviderType(ProviderType execution_provider_type) {
+    execution_provider_type_ = execution_provider_type;
+  }
 
   /** Call the provided function for all explicit inputs, implicit inputs, and outputs of this Node.
       If the NodeArg is an explicit or implicit input, is_input will be true when func is called.
@@ -477,6 +479,17 @@ class Node {
   Node(NodeIndex index, Graph& graph) : index_(index), graph_(&graph) {}
 
 #if !defined(ORT_MINIMAL_BUILD)
+  // create a Graph instance for an attribute that contains a GraphProto
+  void CreateSubgraph(const std::string& attr_name);
+
+  const std::vector<std::unique_ptr<Graph>>& MutableSubgraphs() noexcept { return subgraphs_; }
+
+  // validate and update the input arg count
+  common::Status UpdateInputArgCount();
+
+#endif  // !defined(ORT_MINIMAL_BUILD)
+
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
   void Init(const std::string& name,
             const std::string& op_type,
             const std::string& description,
@@ -485,25 +498,15 @@ class Node {
             const NodeAttributes* attributes,
             const std::string& domain);
 
-  // create a Graph instance for an attribute that contains a GraphProto
-  void CreateSubgraph(const std::string& attr_name);
-
   // internal only method to allow selected classes to directly alter the input/output definitions and arg counts
   Definitions& MutableDefinitions() noexcept;
 
   // internal only method to allow selected classes to directly alter the links between nodes.
   Relationships& MutableRelationships() noexcept;
 
-  const std::vector<std::unique_ptr<Graph>>& MutableSubgraphs() noexcept { return subgraphs_; }
-
-  void SetNodeType(Node::Type node_type) noexcept;
-
+  void SetNodeType(Node::Type node_type) noexcept { node_type_ = node_type; }
   void SetFunctionBody(const Function& func);
-
-  // validate and update the input arg count
-  common::Status UpdateInputArgCount();
-
-#endif  // !defined(ORT_MINIMAL_BUILD)
+#endif
 
   const Definitions& GetDefinitions() const noexcept { return definitions_; }
   const Relationships& GetRelationships() const noexcept { return relationships_; }
@@ -891,11 +894,12 @@ class Graph {
   void KahnsTopologicalSort(const std::function<void(const Node*)>& enter,
                             const std::function<bool(const Node*, const Node*)>& comp) const;
 
+#endif
+
   /** Gets the map of operator domains to their opset versions. */
   const std::unordered_map<std::string, int>& DomainToVersionMap() const noexcept {
     return domain_to_version_;
   }
-#endif
 
 #if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
   /**
@@ -1303,12 +1307,12 @@ class Graph {
       sparse_tensor_names_;
 
 #if !defined(ORT_MINIMAL_BUILD)
-
   IOnnxRuntimeOpSchemaCollectionPtr schema_registry_;
-
-  std::vector<std::unique_ptr<onnxruntime::Function>> function_container_;
-
 #endif  // !defined(ORT_MINIMAL_BUILD)
+
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+  std::vector<std::unique_ptr<onnxruntime::Function>> function_container_;
+#endif
 
   // Graph nodes.
   // Element in <nodes_> may be nullptr due to graph optimization.

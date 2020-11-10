@@ -33,16 +33,6 @@ class KernelRegistryManager {
   Status RegisterKernels(const ExecutionProviders& execution_providers) ORT_MUST_USE_RESULT;
 
 #if !defined(ORT_MINIMAL_BUILD)
-
-  // The registry passed in this function has highest priority than anything already in this KernelRegistryManager,
-  // and anything registered from RegisterKernels
-  // For example, if you do:
-  // RegisterKernels(providers)
-  // RegisterKernelRegistry(A);
-  // RegisterKernelRegistry(B);
-  // Then B > A > providers
-  void RegisterKernelRegistry(std::shared_ptr<KernelRegistry> kernel_registry);
-
   // This function assumes the node is already assigned to an execution provider
   // Don't call this function before graph partition is done
   Status SearchKernelRegistry(const onnxruntime::Node& node,
@@ -52,6 +42,17 @@ class KernelRegistryManager {
    * Whether this node can be run on this provider
    */
   static bool HasImplementationOf(const KernelRegistryManager& r, const Node& node, const std::string& provider_type);
+#endif
+
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+  // The registry passed in this function has highest priority than anything already in this KernelRegistryManager,
+  // and anything registered from RegisterKernels
+  // For example, if you do:
+  // RegisterKernels(providers)
+  // RegisterKernelRegistry(A);
+  // RegisterKernelRegistry(B);
+  // Then B > A > providers
+  void RegisterKernelRegistry(std::shared_ptr<KernelRegistry> kernel_registry);
 
   /**
    * Search kernel registry by provider type.

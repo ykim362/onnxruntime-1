@@ -238,7 +238,7 @@ def parse_arguments():
 
     def verify_device_type(device_read):
         choices = ["CPU_FP32", "GPU_FP32", "GPU_FP16", "VAD-M_FP16", "MYRIAD_FP16", "VAD-F_FP32"]
-        status_Hetero = True
+        status_hetero = True
         res = False
         if(device_read in choices):
             res = True
@@ -248,14 +248,14 @@ def parse_arguments():
             comma_separated_devices = comma_separated_devices[1].split(',')
             if(len(comma_separated_devices) < 2):
                 print("Atleast two devices required in Hetero Mode")
-                status_Hetero = False
+                status_hetero = False
             dev_options = ["CPU", "GPU", "MYRIAD", "FPGA", "HDDL"]
             for dev in comma_separated_devices:
                 if(dev not in dev_options):
-                    status_Hetero = False
+                    status_hetero = False
                     break
 
-        def Invalid_Hetero_Build():
+        def invalid_hetero_build():
             print("\n" + "If trying to build Hetero, specifiy the supported devices along with it")
             print("specify the keyword HETERO followed by the devices in the order of priority you want to build")
             print("The different hardware devices that can be added in HETERO ")
@@ -268,11 +268,11 @@ def parse_arguments():
             print("pick the build type for specific Hardware Device from following options: ", choices)
             print("\n")
             if not device_read.startswith("HETERO:"):
-                Invalid_Hetero_Build()
+                invalid_hetero_build()
             sys.exit("Wrong Build Type selected")
 
-        if(status_Hetero is False):
-            Invalid_Hetero_Build()
+        if(status_hetero is False):
+            invalid_hetero_build()
 
         return device_read
 
@@ -422,6 +422,8 @@ def parse_arguments():
                         help="Disable exceptions to reduce binary size. Requires --minimal_build.")
     parser.add_argument("--disable_ort_format_load", action='store_true',
                         help='Disable support for loading ORT format models in a non-minimal build.')
+    parser.add_argument("--use_internal_testing_ep", action='store_true',
+                        help='Include the internal test EP that validates support for custom EPs in a minimal build.')
 
     parser.add_argument("--use_rocm", action='store_true', help="Build with ROCm")
     parser.add_argument("--rocm_home", help="Path to ROCm installation dir")
@@ -696,6 +698,7 @@ def generate_build_tree(cmake_path, source_dir, build_dir, cuda_home, cudnn_home
         "-Donnxruntime_MINIMAL_BUILD=" + ("ON" if args.minimal_build else "OFF"),
         "-Donnxruntime_REDUCED_OPS_BUILD=" + (
             "ON" if args.include_ops_by_config or args.include_ops_by_model else "OFF"),
+        "-Donnxruntime_USE_INTERNAL_TESTING_EP=" + ("ON" if args.use_internal_testing_ep else "OFF"),
         "-Donnxruntime_MSVC_STATIC_RUNTIME=" + (
             "ON" if args.enable_msvc_static_runtime else "OFF"),
         # enable pyop if it is nightly build

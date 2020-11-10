@@ -45,14 +45,15 @@ Status KernelRegistryManager::RegisterKernels(const ExecutionProviders& executio
   return Status::OK();
 }
 
-#if !defined(ORT_MINIMAL_BUILD)
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 void KernelRegistryManager::RegisterKernelRegistry(std::shared_ptr<KernelRegistry> kernel_registry) {
   if (nullptr == kernel_registry) {
     return;
   }
   custom_kernel_registries_.push_front(kernel_registry);
 }
-
+#endif
+#if !defined(ORT_MINIMAL_BUILD)
 bool KernelRegistryManager::HasImplementationOf(const KernelRegistryManager& r, const Node& node, const std::string& provider_type) {
   std::vector<const KernelRegistry*> kernel_registries = r.GetKernelRegistriesByProviderType(provider_type);
   return std::any_of(kernel_registries.begin(), kernel_registries.end(), [&](const KernelRegistry* kernel_registry) {

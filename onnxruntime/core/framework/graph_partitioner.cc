@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+
 #include "core/framework/graph_partitioner.h"
 #include "core/framework/kernel_registry_manager.h"
 #include "core/graph/function.h"
@@ -512,6 +514,7 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
 #if !defined(ORT_MINIMAL_BUILD)
     ORT_RETURN_IF_ERROR(PartitionOnnxFormatModel(graph, export_dll, func_mgr, *fused_kernel_registry, mode));
 #else
+    ORT_UNUSED_PARAMETER(export_dll);
     ORT_THROW("Not supported in this build.");
 #endif
   } else {
@@ -527,3 +530,6 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
   return Status::OK();
 }
 }  // namespace onnxruntime
+
+#endif // !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+

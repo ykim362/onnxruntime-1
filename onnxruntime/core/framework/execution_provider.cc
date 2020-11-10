@@ -81,6 +81,7 @@ void IExecutionProvider::InsertAllocator(AllocatorPtr allocator) {
   allocator_list_.push_back(allocator);
 }
 
+#if !defined(ORT_MINIMAL_BUILD)
 common::Status IExecutionProvider::Compile(const std::vector<onnxruntime::Node*>& /*fused_node*/,
                                            std::vector<NodeComputeInfo>& /*node_compute_funcs*/) {
   return common::Status(common::ONNXRUNTIME, common::NOT_IMPLEMENTED);
@@ -90,11 +91,14 @@ common::Status IExecutionProvider::Compile(const std::vector<onnxruntime::Node*>
                                            std::string& /*dll_path*/) {
   return common::Status(common::ONNXRUNTIME, common::NOT_IMPLEMENTED);
 }
+#endif
 
-common::Status IExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>& /*fused_nodes*/,
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+common::Status IExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>& /*fused_nodes_and_graphs*/,
                                            std::vector<NodeComputeInfo>& /*node_compute_funcs*/) {
   return common::Status(common::ONNXRUNTIME, common::NOT_IMPLEMENTED);
 }
+#endif
 
 std::shared_ptr<KernelRegistry> IExecutionProvider::GetKernelRegistry() const {
   return nullptr;

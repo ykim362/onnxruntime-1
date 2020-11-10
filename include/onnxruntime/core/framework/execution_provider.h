@@ -189,6 +189,7 @@ class IExecutionProvider {
 
 #endif
 
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
   struct FusedNodeAndGraph {
     const std::reference_wrapper<onnxruntime::Node> fused_node;
     // GraphViewer that filters the full graph to the nodes that are covered by 'node'
@@ -204,8 +205,9 @@ class IExecutionProvider {
            Do NOT cache the GraphViewer in FusedNodeAndGraph.filtered_graph in any of the NodeComputeInfo functions
            as it is only valid for the duration of the call to Compile.
   */
-  virtual common::Status Compile(const std::vector<FusedNodeAndGraph>& fused_nodes,
+  virtual common::Status Compile(const std::vector<FusedNodeAndGraph>& fused_nodes_and_graphs,
                                  std::vector<NodeComputeInfo>& node_compute_funcs);
+#endif
 
   // Fusion approach that is suppported
   enum class FusionStyle {

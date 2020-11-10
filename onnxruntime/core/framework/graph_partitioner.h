@@ -3,6 +3,8 @@
 
 #pragma once
 
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+
 #include "core/common/common.h"
 #include "core/graph/graph_viewer.h"
 #include "core/framework/op_kernel.h"
@@ -54,3 +56,5 @@ class GraphPartitioner {
   const ExecutionProviders& providers_;
 };
 }  // namespace onnxruntime
+
+#endif  // !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)

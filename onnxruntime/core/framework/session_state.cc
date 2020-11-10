@@ -938,6 +938,7 @@ Status SessionState::FinalizeSessionState(const std::basic_string<PATH_CHAR_TYPE
     ORT_UNUSED_PARAMETER(kernel_registry_manager);
     ORT_UNUSED_PARAMETER(session_options);
     ORT_UNUSED_PARAMETER(remove_initializers);
+    ORT_UNUSED_PARAMETER(saving_ort_format);
     return Status(ONNXRUNTIME, INVALID_ARGUMENT,
                   "Serialized session state must be provided from an ORT format model in this build.");
 #endif

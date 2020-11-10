@@ -544,10 +544,8 @@ class InferenceSession {
   std::vector<std::string> transformers_to_enable_;
 #endif
 
-  Status InferenceSession::PartitionOrtFormatModel(onnxruntime::Graph& graph,
-                                                   const ExecutionProviders& providers,
-                                                   KernelRegistryManager& kernel_registry_manager,
-                                                   SessionState& session_state) const;
+  Status PartitionOrtFormatModel(onnxruntime::Graph& graph, const ExecutionProviders& providers,
+                                 KernelRegistryManager& kernel_registry_manager, SessionState& session_state) const;
 
   SessionOptions session_options_;
 

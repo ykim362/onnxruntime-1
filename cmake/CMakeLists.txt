@@ -122,8 +122,7 @@ option(onnxruntime_DISABLE_EXCEPTIONS "Disable exception handling. Requires onnx
 option(onnxruntime_MINIMAL_BUILD "Exclude as much as possible from the build. Support ORT format models. No support for ONNX format models." OFF)
 option(onnxruntime_REDUCED_OPS_BUILD "Reduced set of kernels are registered in build via modification of the kernel registration source files." OFF)
 option(onnxruntime_DISABLE_ORT_FORMAT_LOAD "Disable loading an ORT format model when onnxruntime_MINIMAL_BUILD=OFF (i.e. in a full build)." OFF)
-# FIXME - Default to ON during testing for convenience
-option(onnxruntime_USE_INTERNAL_TESTING_EP "Build the internal testing EP that is used for testing runtime support for custom EPs in a minimal build." ON)
+option(onnxruntime_USE_INTERNAL_TESTING_EP "Build the internal testing EP that is used for testing runtime support for custom EPs in a minimal build." OFF)
 
 # training options
 option(onnxruntime_ENABLE_NVTX_PROFILE "Enable NVTX profile." OFF)
@@ -253,6 +252,12 @@ else()
   if (NOT onnxruntime_DISABLE_ORT_FORMAT_LOAD)
     add_compile_definitions(ENABLE_ORT_FORMAT_LOAD)
   endif()
+endif()
+
+# include the test EP used to validate support for custom EPs in ORT format models in all Debug builds.
+# for other build types it needs to be manually enabled
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(onnxruntime_USE_INTERNAL_TESTING_EP ON)
 endif()
 
 if(onnxruntime_ENABLE_LTO)

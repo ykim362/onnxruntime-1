@@ -150,6 +150,7 @@ std::unique_ptr<IExecutionProvider> DefaultInternalTestingExecutionProvider(
 #ifdef USE_INTERNAL_TESTING_EP
   return CreateExecutionProviderFactory_InternalTesting(supported_ops)->CreateProvider();
 #else
+  ORT_UNUSED_PARAMETER(supported_ops);
   return nullptr;
 #endif
 }

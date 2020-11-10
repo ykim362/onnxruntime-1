@@ -133,21 +133,26 @@ static TypeProto TypeProtoFromTensorProto(const TensorProto& tensor) {
 
   return t;
 }
+#endif
 
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 NodeArg::NodeArg(const std::string& name, const TypeProto* p_node_arg_type) {
   node_arg_info_.set_name(name);
   // If the name is empty, it means the arg does not exist.
   exists_ = !(name.empty());
   if (nullptr != p_node_arg_type) {
     (*node_arg_info_.mutable_type()) = *p_node_arg_type;
+#if !defined(ORT_MINIMAL_BUILD)
+    // should not be possible to have invalid values in the ORT format model, so we don't need this
+	// in a minimal build	
     RemoveInvalidValues(*node_arg_info_.mutable_type());
+#endif
     type_ = DataTypeUtils::ToType(node_arg_info_.type());
   } else {
     type_ = nullptr;
   }
 }
-
-#endif  // !defined(ORT_MINIMAL_BUILD)
+#endif  // !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 
 NodeArg::NodeArg(NodeArgInfo&& node_arg_info) {
   node_arg_info_ = std::move(node_arg_info);
@@ -427,10 +432,6 @@ void Node::SetPriority(int priority) noexcept {
 
 #if !defined(ORT_MINIMAL_BUILD)
 
-void Node::SetNodeType(Node::Type node_type) noexcept {
-  node_type_ = node_type;
-}
-
 const Function* Node::GetFunctionBody(bool try_init_func_body) {
   if (nullptr != func_body_) {
     return func_body_;
@@ -448,10 +449,6 @@ void Node::SetFunctionBody(const Function& func) {
   func_body_ = &func;
   op_ = &func.OpSchema();
   since_version_ = op_->since_version();
-}
-
-void Node::SetExecutionProviderType(ProviderType execution_provider_type) {
-  execution_provider_type_ = execution_provider_type;
 }
 
 void Node::ToProto(NodeProto& proto, bool update_subgraphs) const {
@@ -668,7 +665,7 @@ Status Node::LoadEdgesFromOrtFormat(const onnxruntime::experimental::fbs::NodeEd
 }
 #endif
 
-#if !defined(ORT_MINIMAL_BUILD)
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 void Node::Init(const std::string& name,
                 const std::string& op_type,
                 const std::string& description,
@@ -697,7 +694,11 @@ void Node::Init(const std::string& name,
 
     for (auto& name_to_attr : attributes_) {
       if (utils::HasGraph(name_to_attr.second)) {
+#if !defined(ORT_MINIMAL_BUILD)
         CreateSubgraph(name_to_attr.first);
+#else
+        ORT_THROW("Creating node with a subgraph via AddNode is not supported in this build.");
+#endif
       }
     }
   }
@@ -716,7 +717,9 @@ Node::Relationships& Node::MutableRelationships() noexcept {
   graph_->SetGraphProtoSyncNeeded();
   return relationships_;
 }
+#endif  // !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 
+#if !defined(ORT_MINIMAL_BUILD)
 void Node::CreateSubgraph(const std::string& attr_name) {
   auto attr = attributes_.find(attr_name);
 
@@ -1264,6 +1267,7 @@ common::Status Graph::SetOuterScopeNodeArgs(const std::unordered_set<std::string
 
   return Status::OK();
 }
+#endif  // !defined(ORT_MINIMAL_BUILD)
 
 #if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 void Graph::AddEdge(NodeIndex src_node_index, NodeIndex dst_node_index, int src_arg_slot, int dst_arg_slot) {
@@ -1352,6 +1356,7 @@ void Graph::RemoveEdge(NodeIndex src_node_index, NodeIndex dst_node_index, int s
 }
 #endif  // !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 
+#if !defined(ORT_MINIMAL_BUILD)
 GSL_SUPPRESS(es .84)  // ignoring return value from unordered_map::insert causes noisy complaint
 Status Graph::BuildConnections(std::unordered_set<std::string>& outer_scope_node_args_consumed) {
   const std::unordered_set<std::string>& outer_scope_node_args = resolve_context_.outer_scope_node_args;
@@ -1598,6 +1603,7 @@ void Graph::ReverseDFSFrom(const std::vector<const Node*>& from,
   }
 }
 
+#if !defined(ORT_MINIMAL_BUILD)
 void Graph::KahnsTopologicalSort(const std::function<void(const Node*)>& enter,
                                  const std::function<bool(const Node*, const Node*)>& comp) const {
   std::unordered_map<NodeIndex, size_t> in_degree;
@@ -1636,7 +1642,6 @@ void Graph::KahnsTopologicalSort(const std::function<void(const Node*)>& enter,
     ORT_THROW("Some nodes are not included in the topological sort, graph have a cycle.");
   }
 }
-#if !defined(ORT_MINIMAL_BUILD)
 
 GSL_SUPPRESS(es .84)  // noisy warning about ignoring return value from insert(...)
 Status Graph::PerformTopologicalSortAndCheckIsAcyclic() {
@@ -2898,6 +2903,8 @@ std::string Graph::GenerateNodeName(const std::string& base_name) {
 
   return new_name;
 }
+#endif
+
 #if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 Node& Graph::AddNode(const std::string& name,
                      const std::string& op_type,
@@ -2949,6 +2956,7 @@ bool Graph::RemoveNode(NodeIndex p_index) {
 }
 #endif  // !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 
+#if !defined(ORT_MINIMAL_BUILD)
 bool Graph::AddControlEdge(NodeIndex src_node_index, NodeIndex dst_node_index) {
   if (nodes_.size() <= src_node_index ||
       nodes_.size() <= dst_node_index ||
@@ -3285,6 +3293,12 @@ Status Graph::SetGraphInputsOutputs() {
   return Status::OK();
 }
 
+IOnnxRuntimeOpSchemaCollectionPtr Graph::GetSchemaRegistry() const {
+  return schema_registry_;
+}
+#endif  // !defined(ORT_MINIMAL_BUILD)
+
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 // calling private ctor
 GSL_SUPPRESS(r .11)
 gsl::not_null<Node*> Graph::AllocateNode() {
@@ -3316,12 +3330,6 @@ bool Graph::ReleaseNode(NodeIndex index) {
   return true;
 }
 
-IOnnxRuntimeOpSchemaCollectionPtr Graph::GetSchemaRegistry() const {
-  return schema_registry_;
-}
-#endif  // !defined(ORT_MINIMAL_BUILD)
-
-#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 Node& Graph::CreateFusedSubGraphNode(const IndexedSubGraph& sub_graph, const std::string& fused_node_name) {
   const auto* func_meta_def = sub_graph.GetMetaDef();
   ORT_ENFORCE(nullptr != func_meta_def);
@@ -3434,7 +3442,7 @@ void Graph::FinalizeFuseSubGraph(const IndexedSubGraph& sub_graph, Node& fused_n
   }
 }
 
-#endif
+#endif  // #if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
 
 #if !defined(ORT_MINIMAL_BUILD)
 Node& Graph::FuseSubGraph(const IndexedSubGraph& sub_graph,

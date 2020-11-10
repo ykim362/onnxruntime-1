@@ -1188,6 +1188,7 @@ common::Status InferenceSession::Initialize() {
     } else
 #endif  // !defined(ORT_MINIMAL_BUILD)
     {
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
       // nodes are already partitioned, but a custom EP may compile some at runtime.
       // run the partitioning to allow that to happen.
       //
@@ -1196,6 +1197,7 @@ common::Status InferenceSession::Initialize() {
         ORT_RETURN_IF_ERROR_SESSIONID_(PartitionOrtFormatModel(graph, execution_providers_, kernel_registry_manager_,
                                                                *session_state_));
       }
+#endif
     }
 
     const experimental::fbs::SessionState* serialized_session_state =
