@@ -152,7 +152,7 @@ class ValidNodes {
   };
 
  private:
-  TNodesContainer* nodes_;  // always set by ctor to and never nullptr
+  gsl::not_null<TNodesContainer*> nodes_;  // always set by ctor
 
   // no filtering if not set. this instance owns the filter func if set.
   NodeFilterFunc filter_node_fn_;

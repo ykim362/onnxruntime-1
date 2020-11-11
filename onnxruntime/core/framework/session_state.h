@@ -339,7 +339,7 @@ class SessionState {
   std::unordered_map<NodeIndex, gsl::not_null<const KernelCreateInfo*>> kernel_create_info_map_;
 
   // If we compile kernels in a minimal build we need a way to find the kernel using the hash.
-  // We populate this map when doing the kernel compilation in GraphPartitioner, and check use it in LoadFromOrtFormat.
+  // We populate this map when doing the kernel compilation in GraphPartitioner, and use it in LoadFromOrtFormat.
   std::unordered_map<std::string, uint64_t> compiled_kernel_hashes_;
 
   // cache of the constructed kernels to avoid spending construction time per executor

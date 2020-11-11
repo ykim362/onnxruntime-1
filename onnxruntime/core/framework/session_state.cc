@@ -129,15 +129,16 @@ Status SessionState::PopulateKernelCreateInfo(KernelRegistryManager& kernel_regi
 
     auto status = kernel_registry_manager.SearchKernelRegistry(node, &kci);
     if (!status.IsOK() && saving_ort_format) {
-      // if we didn't find the kernel and are saving to ORT format a custom EP that compiles nodes must be enabled.
-      // in that case we assign the node to that EP but do not compile yet.
+      // if we didn't find the kernel and are saving to ORT format an EP that compiles nodes is enabled.
+      // in that case we assigned the node to that EP but do not compile it into a fused node.
       // this keeps the original node and prevents level 2 and level 3 optimizers from modifying it.
-      // we revert to the CPU EP to include the hash for the kernel as a fallback. at runtime when the model
+      // we now revert to the CPU EP to include the hash for the kernel as a fallback. at runtime when the model
       // is loaded in a minimal build, the compiling EP will replace this node if possible. if that's not possible for
       // some reason we can fallback to the CPU EP implementation via this hash.
       node.SetExecutionProviderType(kCpuExecutionProvider);
       status = kernel_registry_manager.SearchKernelRegistry(node, &kci);
     }
+    
     ORT_RETURN_IF_ERROR(status);
 
     ORT_IGNORE_RETURN_VALUE(
@@ -836,7 +837,7 @@ Status SessionState::LoadFromOrtFormat(const fbs::SessionState& fbs_session_stat
 
     const Node* node = graph_.GetNode(node_idx);
     if (node == nullptr) {
-      // this is OK if we have compiled kernels. if not the model is invalid.
+      // this is OK if we have compiled kernels and the original node was replaced. if not the model is invalid.
       ORT_RETURN_IF(compiled_kernel_hashes_.empty(),
                     "Can't find node with index ", node_idx, ". Invalid ORT format model.");
       continue;
@@ -923,9 +924,6 @@ Status SessionState::FinalizeSessionState(const std::basic_string<PATH_CHAR_TYPE
   if (serialized_session_state) {
 #if defined(ENABLE_ORT_FORMAT_LOAD)
     ORT_RETURN_IF_ERROR(LoadFromOrtFormat(*serialized_session_state, kernel_registry_manager));
-
-    // if we have an EP that can compile nodes we need to go update the kernel create info for those nodes
-
 #else
     return Status(ONNXRUNTIME, INVALID_ARGUMENT,
                   "ORT format model is not supported in this build.");

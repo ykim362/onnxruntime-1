@@ -478,18 +478,7 @@ class Node {
 
   Node(NodeIndex index, Graph& graph) : index_(index), graph_(&graph) {}
 
-#if !defined(ORT_MINIMAL_BUILD)
-  // create a Graph instance for an attribute that contains a GraphProto
-  void CreateSubgraph(const std::string& attr_name);
-
-  const std::vector<std::unique_ptr<Graph>>& MutableSubgraphs() noexcept { return subgraphs_; }
-
-  // validate and update the input arg count
-  common::Status UpdateInputArgCount();
-
-#endif  // !defined(ORT_MINIMAL_BUILD)
-
-#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)
   void Init(const std::string& name,
             const std::string& op_type,
             const std::string& description,
@@ -505,8 +494,17 @@ class Node {
   Relationships& MutableRelationships() noexcept;
 
   void SetNodeType(Node::Type node_type) noexcept { node_type_ = node_type; }
-  void SetFunctionBody(const Function& func);
 #endif
+
+  // create a Graph instance for an attribute that contains a GraphProto
+  void CreateSubgraph(const std::string& attr_name);
+
+  const std::vector<std::unique_ptr<Graph>>& MutableSubgraphs() noexcept { return subgraphs_; }
+
+  // validate and update the input arg count
+  common::Status UpdateInputArgCount();
+
+  void SetFunctionBody(const Function& func);
 
   const Definitions& GetDefinitions() const noexcept { return definitions_; }
   const Relationships& GetRelationships() const noexcept { return relationships_; }
@@ -580,6 +578,15 @@ class Graph {
 
   /** Gets the path of the owning model, if any. */
   const Path& ModelPath() const;
+
+  /** Returns true if this is a subgraph or false if it is a high-level graph. */
+  bool IsSubgraph() const { return parent_graph_ != nullptr; }
+
+  /** Returns the parent graph if this is a subgraph */
+  const Graph* ParentGraph() const { return parent_graph_; }
+
+  /** Returns the mutable parent graph if this is a subgraph */
+  Graph* MutableParentGraph() { return parent_graph_; }
 
 #if !defined(ORT_MINIMAL_BUILD)
   /** Sets the Graph name. */
@@ -767,7 +774,7 @@ class Graph {
   Node& AddNode(const Node& other);
 #endif
 
-#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)
   /** Add a Node to this Graph.
   @param name The Node name. Must be unique in this Graph.
   @param op_type The operator type. e.g. ONNX operator name.
@@ -901,7 +908,7 @@ class Graph {
     return domain_to_version_;
   }
 
-#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)
   /**
   Create a single Node that will be the result of the a fusion of multiple nodes in this Graph.
   @param sub_graph A IndexSubGraph instance with details of the nodes to fuse.
@@ -917,6 +924,13 @@ class Graph {
 #endif
 
 #if !defined(ORT_MINIMAL_BUILD)
+  /** Gets the GraphProto representation of this Graph. */
+  const ONNX_NAMESPACE::GraphProto& ToGraphProto();
+  ONNX_NAMESPACE::GraphProto ToGraphProto() const;
+
+  /** Gets the ISchemaRegistry instances being used with this Graph. */
+  IOnnxRuntimeOpSchemaCollectionPtr GetSchemaRegistry() const;
+
   /**
   Create a single Function based Node that is the result of the a fusion of multiple nodes in this Graph.
   A new Graph instance will be created for the fused nodes.
@@ -935,13 +949,6 @@ class Graph {
 
   /** Initialize function body for the given node */
   void InitFunctionBodyForNode(Node& node);
-
-  /** Gets the GraphProto representation of this Graph. */
-  const ONNX_NAMESPACE::GraphProto& ToGraphProto();
-  ONNX_NAMESPACE::GraphProto ToGraphProto() const;
-
-  /** Gets the ISchemaRegistry instances being used with this Graph. */
-  IOnnxRuntimeOpSchemaCollectionPtr GetSchemaRegistry() const;
 
   /** Mark a NodeArg name as coming from the outer scope when programmatically constructing a Graph that will
   be used as a GraphProto attribute in another Node..
@@ -964,18 +971,7 @@ class Graph {
   @remarks Note that the output order matters for subgraphs.
   */
   void SetOutputs(const std::vector<const NodeArg*>& outputs);
-#endif  // !defined(ORT_MINIMAL_BUILD)
 
-  /** Returns true if this is a subgraph or false if it is a high-level graph. */
-  bool IsSubgraph() const { return parent_graph_ != nullptr; }
-
-  /** Returns the parent graph if this is a subgraph */
-  const Graph* ParentGraph() const { return parent_graph_; }
-
-  /** Returns the mutable parent graph if this is a subgraph */
-  Graph* MutableParentGraph() { return parent_graph_; }
-
-#if !defined(ORT_MINIMAL_BUILD)
   /** Sets the type of a NodeArg, replacing existing type/shape if any */
   void SetNodeArgType(NodeArg& arg, const onnx::TypeProto& type_proto);
 
@@ -1241,8 +1237,7 @@ class Graph {
 
   template <typename TInstance>
   static auto GetProducerNodeImpl(
-      TInstance& instance, const std::string& node_arg_name)
-      -> decltype(instance.GetNode(0)) {
+      TInstance& instance, const std::string& node_arg_name) -> decltype(instance.GetNode(0)) {
     auto iter = instance.node_arg_to_producer_node_.find(node_arg_name);
     if (iter != instance.node_arg_to_producer_node_.end()) {
       auto node_index = iter->second;
@@ -1253,8 +1248,7 @@ class Graph {
 
   template <typename TInstance>
   static auto GetConsumerNodesImpl(
-      TInstance& instance, const std::string& node_arg_name)
-      -> std::vector<decltype(instance.GetNode(0))> {
+      TInstance& instance, const std::string& node_arg_name) -> std::vector<decltype(instance.GetNode(0))> {
     std::vector<decltype(instance.GetNode(0))> results;
     auto iter = instance.node_arg_to_consumer_nodes_.find(node_arg_name);
     if (iter != instance.node_arg_to_consumer_nodes_.end()) {
@@ -1268,7 +1262,7 @@ class Graph {
 
 #endif  // !defined(ORT_MINIMAL_BUILD)
 
-#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)
   gsl::not_null<Node*> AllocateNode();
 
   // Release the node.
@@ -1308,9 +1302,7 @@ class Graph {
 
 #if !defined(ORT_MINIMAL_BUILD)
   IOnnxRuntimeOpSchemaCollectionPtr schema_registry_;
-#endif  // !defined(ORT_MINIMAL_BUILD)
 
-#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
   std::vector<std::unique_ptr<onnxruntime::Function>> function_container_;
 #endif
 

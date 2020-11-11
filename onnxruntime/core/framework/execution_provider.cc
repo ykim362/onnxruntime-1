@@ -93,7 +93,7 @@ common::Status IExecutionProvider::Compile(const std::vector<onnxruntime::Node*>
 }
 #endif
 
-#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)
 common::Status IExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>& /*fused_nodes_and_graphs*/,
                                            std::vector<NodeComputeInfo>& /*node_compute_funcs*/) {
   return common::Status(common::ONNXRUNTIME, common::NOT_IMPLEMENTED);

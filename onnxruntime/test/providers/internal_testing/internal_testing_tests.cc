@@ -25,7 +25,7 @@ static void CreateSession(const SessionOptions& so, std::unique_ptr<InferenceSes
                           const std::unordered_set<std::string>* override_supported_ops = nullptr) {
   session = onnxruntime::make_unique<InferenceSessionWrapper>(so, GetEnvironment());
 
-  // set supported ops to some ops that are found consecutively in the model.
+  // set supported ops to ops that are ideally found consecutively in the model.
   // we can say the EP potentially handles them all, but can also test removing handling of one or more ops
   // at runtime to simulate a lower spec device where not all ops can be handled. this allows us to test
   // that we can revert ops back to the CPU implementation successfully

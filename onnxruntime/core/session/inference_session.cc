@@ -827,7 +827,7 @@ common::Status InferenceSession::TransformGraph(onnxruntime::Graph& graph,
   // at runtime, the ORT format model will re-do the partitioning/compilation of these nodes, which may change
   // to cover fewer nodes due to device capabilities.
   auto mode = saving_model_in_ort_format ? GraphPartitioner::Mode::kAssignOnly
-                                         : GraphPartitioner::Mode::kStandard;
+                                         : GraphPartitioner::Mode::kNormal;
 
   // Do partitioning based on execution providers' capability.
   GraphPartitioner partitioner(kernel_registry_manager, providers);
@@ -897,7 +897,7 @@ common::Status InferenceSession::TransformGraph(onnxruntime::Graph& graph,
 }
 #endif  // !defined(ORT_MINIMAL_BUILD)
 
-#if defined(ENABLE_ORT_FORMAT_LOAD)
+#if !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)
 Status InferenceSession::PartitionOrtFormatModel(onnxruntime::Graph& graph,
                                                  const ExecutionProviders& providers,
                                                  KernelRegistryManager& kernel_registry_manager,
@@ -916,7 +916,9 @@ Status InferenceSession::PartitionOrtFormatModel(onnxruntime::Graph& graph,
 
   return Status::OK();
 }
+#endif
 
+#if defined(ENABLE_ORT_FORMAT_LOAD)
 template <typename T>
 static Status LoadOrtModelBytes(const std::basic_string<T>& model_uri,
                                 std::basic_string<ORTCHAR_T>& model_location,
@@ -1188,7 +1190,7 @@ common::Status InferenceSession::Initialize() {
     } else
 #endif  // !defined(ORT_MINIMAL_BUILD)
     {
-#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)
       // nodes are already partitioned, but a custom EP may compile some at runtime.
       // run the partitioning to allow that to happen.
       //

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)
 
 #include "core/framework/graph_partitioner.h"
 #include "core/framework/kernel_registry_manager.h"
@@ -54,7 +54,6 @@ static KernelDefBuilder& BuildFusedKernelDef(KernelDefBuilder& builder, const In
 }
 
 #if !defined(ORT_MINIMAL_BUILD)
-// TODO: Do we need this or can we just use MetaDef in all cases???
 static KernelDefBuilder& BuildFusedKernelDef(KernelDefBuilder& builder, const onnxruntime::Node& node) {
   auto schema = node.Op();
   builder.SetName(schema->Name())
@@ -98,13 +97,13 @@ static Node* PlaceNode(Graph& graph, const IndexedSubGraph& capability,
     // in order of EP priority
     bool sub_graph_available_for_assignment = true;
     for (auto node_index : capability.nodes) {
-      auto node = graph.GetNode(node_index);
+      auto* node = graph.GetNode(node_index);
       if (nullptr == node || !node->GetExecutionProviderType().empty()) {
         // if mode is kAssignOnly we want all nodes that can _potentially_ be taken by compiling EPs to be assigned,
         // so that we aggregate the nodes covered and ensure the original nodes remain in the ORT format model by
-        // preventing level 2 and 3 optimizers from changing them (optimizers check the EP the node is assigned to
+        // preventing level 2 and 3 optimizers from changing them. optimizers check the EP the node is assigned to
         // and only make changes if the EP is on the optimizer's list of supported EPs. an EP that compiles nodes
-        // should never be on those lists).
+        // should never be on those lists.
         //
         // when the ORT format model is loaded we will process it normally with EP priority being applied for
         // whichever EPs are enabled at the time.
@@ -123,7 +122,7 @@ static Node* PlaceNode(Graph& graph, const IndexedSubGraph& capability,
     }
 
     if (sub_graph_available_for_assignment) {
-      if (mode == GraphPartitioner::Mode::kStandard) {
+      if (mode == GraphPartitioner::Mode::kNormal) {
         std::ostringstream oss;
         oss << provider_type << "_" << capability.GetMetaDef()->name << "_" << count++;
         std::string node_name = oss.str();
@@ -145,17 +144,16 @@ static Node* PlaceNode(Graph& graph, const IndexedSubGraph& capability,
           result = fused_node;
         }
       } else {
-        assert(mode == GraphPartitioner::Mode::kAssignOnly);
-
         // assign the nodes in the indexed subgraph to the current EP so that level 2+ optimizers will not change them.
         // This is used when exporting an ORT format model to maintain the original nodes and re-do the fusion
         // at runtime. The original nodes provide a fallback if fewer nodes can be fused at runtime due to device
         // capabilities.
         for (auto node_index : capability.nodes) {
-          auto node = graph.GetNode(node_index);
-          // due to above check for sub_graph_available_for_assignment we know 'node' is valid and unassigned
-          node->SetExecutionProviderType(provider_type);
-        }
+          auto* node = graph.GetNode(node_index);
+          if (node != nullptr) {
+            node->SetExecutionProviderType(provider_type);
+          }
+        }               
       }
     }
   }
@@ -210,11 +208,16 @@ static Status PartitionOnnxFormatModelImpl(Graph& graph, bool export_dll, FuncMa
   std::vector<std::unique_ptr<ComputeCapability>> capabilities_to_compile;
   capabilities_to_compile.reserve(std::count_if(capabilities.cbegin(), capabilities.cend(),
                                                 [](const std::unique_ptr<ComputeCapability>& entry) {
-                                                  return entry->sub_graph != nullptr &&
+                                                  return entry != nullptr &&
+                                                         entry->sub_graph != nullptr &&
                                                          entry->sub_graph->GetMetaDef() != nullptr;
                                                 }));
 
   for (auto& capability : capabilities) {
+    if (!capability || !capability->sub_graph) {  // in theory an EP could return an empty value...
+      continue;
+    }
+
     Node* n = PlaceNode(graph, *capability->sub_graph, kernel_registry_mgr, type, fusion_style, mode, count);
     if (n != nullptr) {
       nodes_to_compile.push_back(n);
@@ -222,7 +225,7 @@ static Status PartitionOnnxFormatModelImpl(Graph& graph, bool export_dll, FuncMa
     }
   }
 
-  // NOTE: if mode_ is kAssignOnly, nodes_to_compile will be empty at this point
+  // NOTE: if mode_ is kAssignOnly, nodes_to_compile will be empty at this point due to logic in PlaceNode
   if (!nodes_to_compile.empty()) {
     std::vector<NodeComputeInfo> node_compute_funcs;
 
@@ -248,7 +251,7 @@ static Status PartitionOnnxFormatModelImpl(Graph& graph, bool export_dll, FuncMa
           return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, type, " did not return correct number of compiled functions");
         }
 
-        for (size_t j = 0; j < nodes_to_compile.size(); j++) {
+        for (size_t j = 0, end = nodes_to_compile.size(); j < end; j++) {
           ORT_RETURN_IF_ERROR(func_mgr.AddFuncInfo(nodes_to_compile[j]->Name(), std::move(node_compute_funcs[j])));
         }
       }
@@ -413,7 +416,7 @@ static Status PartitionOrtFormatModelImpl(Graph& graph, FuncManager& func_mgr,
     const IndexedSubGraph& indexed_sub_graph = *capability->sub_graph;
     const IndexedSubGraph::MetaDef* metadef = indexed_sub_graph.GetMetaDef();
     if (!metadef) {
-      // Static kernel - use the node assignment and kernel hash that was saved in the ORT format model
+      // Static kernel - use the kernel hash that was saved in the ORT format model
       continue;
     }
 
@@ -510,7 +513,7 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
   // It is only visible for current session.
   std::shared_ptr<KernelRegistry> fused_kernel_registry = std::make_shared<KernelRegistry>();
 
-  if (mode == Mode::kStandard || mode == Mode::kAssignOnly) {
+  if (mode == Mode::kNormal || mode == Mode::kAssignOnly) {
 #if !defined(ORT_MINIMAL_BUILD)
     ORT_RETURN_IF_ERROR(PartitionOnnxFormatModel(graph, export_dll, func_mgr, *fused_kernel_registry, mode));
 #else
@@ -518,7 +521,7 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
     ORT_THROW("Not supported in this build.");
 #endif
   } else {
-    ORT_ENFORCE(compiled_kernel_hashes != nullptr, "Compiled kernel hashes were not provided");
+    ORT_ENFORCE(compiled_kernel_hashes != nullptr, "Compiled kernel hashes must be provided");
 
     ORT_RETURN_IF_ERROR(PartitionOrtFormatModel(graph, func_mgr, *fused_kernel_registry, *compiled_kernel_hashes));
   }
@@ -531,5 +534,4 @@ Status GraphPartitioner::Partition(Graph& graph, bool export_dll, FuncManager& f
 }
 }  // namespace onnxruntime
 
-#endif // !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
-
+#endif  // !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)

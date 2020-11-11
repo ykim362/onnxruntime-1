@@ -39,11 +39,10 @@ class FunctionImpl final : public Function {
 };
 
 // Function that uses a GraphViewer so does not need to build a new Model. We still need the OpSchema to be available
-// though so just create that.
+// though so we just create that.
 class ViewerFunctionImpl final : public Function {
  public:
   ViewerFunctionImpl(const onnxruntime::Graph& graph,
-                     // std::unique_ptr<IndexedSubGraph> nodes_to_fuse,
                      const IndexedSubGraph& nodes_to_fuse,
                      const logging::Logger& logger);
 

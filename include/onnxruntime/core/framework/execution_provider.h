@@ -189,7 +189,7 @@ class IExecutionProvider {
 
 #endif
 
-#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
+#if !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)
   struct FusedNodeAndGraph {
     const std::reference_wrapper<onnxruntime::Node> fused_node;
     // GraphViewer that filters the full graph to the nodes that are covered by 'node'

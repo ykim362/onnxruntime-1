@@ -63,17 +63,7 @@ static const onnx::TensorProto* GetInitializer(const Graph& graph, const std::st
 // and mainly provides the subgraph recursion functionality
 common::Status MemcpyTransformer::ApplyImpl(Graph& graph, bool& modified, int graph_level, const logging::Logger& logger) const {
   for (auto& provider : provider_types_) {
-    if (!utils::ProviderIsCpuBased(provider)
-        /*provider != onnxruntime::kCpuExecutionProvider &&
-        provider != onnxruntime::kDnnlExecutionProvider &&
-        provider != onnxruntime::kNGraphExecutionProvider &&
-        provider != onnxruntime::kNupharExecutionProvider &&
-        provider != onnxruntime::kVitisAIExecutionProvider &&
-        provider != onnxruntime::kOpenVINOExecutionProvider &&
-        provider != onnxruntime::kNnapiExecutionProvider &&
-        provider != onnxruntime::kAclExecutionProvider &&
-        provider != onnxruntime::kArmNNExecutionProvider*/
-    ) {
+    if (!utils::ProviderIsCpuBased(provider)) {
       TransformerMemcpyImpl copy_impl(graph, provider);
       auto current_modified = copy_impl.ModifyGraph(registry_manager_);
       modified = modified || current_modified;
