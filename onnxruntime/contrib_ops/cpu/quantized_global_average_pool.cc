@@ -6,7 +6,7 @@
 // #include "core/framework/tensorprotoutils.h"
 // #include "core/providers/common.h"
 #include "core/platform/threadpool.h"
-// #include "core/mlas/inc/mlas.h"
+#include "core/mlas/inc/mlas.h"
 #include <functional>
 
 using onnxruntime::concurrency::ThreadPool;
@@ -26,24 +26,23 @@ Status ComputeAveragePool(
   int64_t kernel_size = std::accumulate(kernel_dims.begin(), kernel_dims.end(), 1LL, std::multiplies<int64_t>());
   if (storage_order == StorageOrder::NCHW) {
     auto worker = [x, y, kernel_size](std::ptrdiff_t first, std::ptrdiff_t last) {
-      auto input_matrix = ConstEigenMatrixMapRowMajor<T>(x + (first * kernel_size), last - first, kernel_size);
-      auto output_matrix = EigenMatrixMapRowMajor<T>(y + first, last - first, 1);
-      output_matrix = input_matrix.template cast<TAccumulate>().rowwise().mean().template cast<T>();
+      const uint8_t* input = (const uint8_t*)(x + (first * kernel_size));
+      uint8_t* output = (uint8_t*)(y + first);
+      MlasQLinearGlobalAveragePool(input, 1.0, 127, output, 1.0, 127, last - first, kernel_size);
     };
     concurrency::ThreadPool::TryParallelFor(tp, static_cast<std::ptrdiff_t>(N * C),
-                                            {static_cast<double>(kernel_size), 1.0, static_cast<double>(kernel_size)},
-                                            worker);
+                                            {static_cast<double>(kernel_size), 1.0, static_cast<double>(kernel_size)}, worker);
   } else {
-    auto worker = [x, y, C, kernel_size](std::ptrdiff_t first, std::ptrdiff_t last) {
-      for (; first < last; ++first) {
-        auto input_matrix = ConstEigenMatrixMapRowMajor<T>(x + (first * C * kernel_size), kernel_size, C);
-        auto output_matrix = EigenMatrixMapRowMajor<T>(y + (first * C), 1, C);
-        output_matrix = input_matrix.template cast<TAccumulate>().colwise().mean().template cast<T>();
-      }
-    };
-    concurrency::ThreadPool::TryParallelFor(tp, static_cast<std::ptrdiff_t>(N),
-                                            {static_cast<double>(kernel_size * C), 1.0 * C, static_cast<double>(kernel_size * C)},
-                                            worker);
+    // auto worker = [x, y, C, kernel_size](std::ptrdiff_t first, std::ptrdiff_t last) {
+    //   for (; first < last; ++first) {
+    //     auto input_matrix = ConstEigenMatrixMapRowMajor<T>(x + (first * C * kernel_size), kernel_size, C);
+    //     auto output_matrix = EigenMatrixMapRowMajor<T>(y + (first * C), 1, C);
+    //     output_matrix = input_matrix.template cast<TAccumulate>().colwise().mean().template cast<T>();
+    //   }
+    // };
+    // concurrency::ThreadPool::TryParallelFor(tp, static_cast<std::ptrdiff_t>(N),
+    //                                         {static_cast<double>(kernel_size * C), 1.0 * C, static_cast<double>(kernel_size * C)},
+    //                                         worker);
   }
   return Status::OK();
 }
@@ -72,8 +71,6 @@ Status QuantizedGlobalAveragePool::Compute(OpKernelContext* context) const {
 
   auto dtype = X.GetElementType();
   switch (dtype) {
-    case ONNX_NAMESPACE::TensorProto_DataType_INT8:
-      return ComputeAveragePool<int8_t, int32_t>(X.Data<int8_t>(), Y.MutableData<int8_t>(), N, C, kernel_dims, storage_order_, tp);
     case ONNX_NAMESPACE::TensorProto_DataType_UINT8:
       return ComputeAveragePool<uint8_t, uint32_t>(X.Data<uint8_t>(), Y.MutableData<uint8_t>(), N, C, kernel_dims, storage_order_, tp);
     default:

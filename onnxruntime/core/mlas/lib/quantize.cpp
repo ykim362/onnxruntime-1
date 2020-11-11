@@ -633,6 +633,106 @@ Return Value:
     }
 }
 
+void
+MLASCALL
+MlasReduceSumU8(
+    const uint8_t* Input,
+    int32_t* Output,
+    size_t Len
+    ) {
+    *Output = 0;
+    if (Len >= 8) {
+        const __m128i vzero = _mm_setzero_si128();
+        __m128i vacc_lo = _mm_setzero_si128();
+        __m128i vacc_hi = _mm_setzero_si128();
+        for (; Len >= 32; Len -= 32) {
+            const __m128i vi0 = _mm_loadl_epi64((const __m128i*)Input);
+            const __m128i vi1 = _mm_loadl_epi64((const __m128i*)(Input + 8));
+            const __m128i vi2 = _mm_loadl_epi64((const __m128i*)(Input + 16));
+            const __m128i vi3 = _mm_loadl_epi64((const __m128i*)(Input + 24));
+
+            const __m128i vxi0 = _mm_unpacklo_epi8(vi0, vzero);
+            const __m128i vxi1 = _mm_unpacklo_epi8(vi1, vzero);
+            const __m128i vxi2 = _mm_unpacklo_epi8(vi2, vzero);
+            const __m128i vxi3 = _mm_unpacklo_epi8(vi3, vzero);
+
+            const __m128i vsum = _mm_add_epi16(_mm_add_epi16(vxi0, vxi1), _mm_add_epi16(vxi2, vxi3));
+            vacc_lo = _mm_add_epi32(vacc_lo, _mm_unpacklo_epi16(vsum, vzero));
+            vacc_hi = _mm_add_epi32(vacc_hi, _mm_unpackhi_epi16(vsum, vzero));
+            Input += 32;
+        }
+        for (; Len >= 8; Len -= 8) {
+            const __m128i vsum = _mm_unpacklo_epi8(_mm_loadl_epi64((const __m128i*)Input), vzero);
+            vacc_lo = _mm_add_epi32(vacc_lo, _mm_unpacklo_epi16(vsum, vzero));
+            vacc_hi = _mm_add_epi32(vacc_hi, _mm_unpackhi_epi16(vsum, vzero));
+            Input += 8;
+        }
+        __m128i vacc = _mm_add_epi32(vacc_lo, vacc_hi);                    // [ D C | B A ]
+        __m128i vshuf = _mm_shuffle_epi32(vacc, _MM_SHUFFLE(2, 3, 0, 1));  // [ C D | A B ]
+        __m128i vsums = _mm_add_epi32(vacc, vshuf);                        // [ D+C C+D | B+A A+B ]
+        vshuf = _mm_shuffle_epi32(vsums, _MM_SHUFFLE(1, 0, 3, 2));         // [ B+A A+B | D+C C+D ]
+        vsums = _mm_add_epi32(vsums, vshuf);
+        *Output = _mm_cvtsi128_si32(vsums);
+    }
+    if (Len > 0) {
+        int32_t sum = 0;
+        for (; Len > 0; Len--) {
+            sum += (int32_t)*Input++;
+        }
+        *Output += sum;
+    }
+}
+
+void
+MLASCALL
+MlasQLinearGlobalAveragePool(
+    const uint8_t* Input,
+    float ScaleInput,
+    int32_t ZeroPointInput,
+    uint8_t* Output,
+    float ScaleOutput,
+    int32_t ZeroPointOutput,
+    size_t Channels,
+    size_t ImageSize
+    ) {
+  const auto vscale = MlasBroadcastFloat32x4(ScaleInput / ScaleOutput);
+  const auto vbias = MlasBroadcastInt32x4(gsl::narrow_cast<int32_t>(-1 * ZeroPointInput));
+  const auto vmin_value = MlasBroadcastFloat32x4(float(0 - ZeroPointOutput));
+  const auto vmax_value = MlasBroadcastFloat32x4(float(255 - ZeroPointOutput));
+  const auto vzero_point = MlasBroadcastInt32x4(ZeroPointOutput);
+  (void)vscale;
+  (void)vbias;
+  (void)vmax_value;
+  (void)vmin_value;
+  (void)vzero_point;    
+
+  int32_t sum_buffer[4];
+  int sum_count = 0;
+  for (; Channels > 0; Channels--) {
+    MlasReduceSumU8(Input, sum_buffer + sum_count, ImageSize);
+    sum_buffer[sum_count] /= (int32_t)ImageSize;
+    Input += ImageSize;
+    ++sum_count;
+    if (sum_count == 4) {
+      auto vsum = _mm_load_si128((__m128i*)sum_buffer);
+      auto vresult = MlasRequantizeOutputVector(vsum, vbias, vscale, vmin_value, vmax_value, vzero_point);
+      vresult = _mm_packus_epi16(vresult, vresult);
+      vresult = _mm_packus_epi16(vresult, vresult);
+      *((int32_t*)Output) = _mm_cvtsi128_si32(vresult);
+      sum_count = 0;
+      Output += 4;
+    }
+  }
+  if (sum_count > 0) {
+    auto vsum = _mm_load_si128((__m128i*)sum_buffer);
+    auto vresult = MlasRequantizeOutputVector(vsum, vbias, vscale, vmin_value, vmax_value, vzero_point);
+    for (; sum_count > 0; --sum_count) {
+      *Output++ = (uint8_t)_mm_cvtsi128_si32(vresult);
+      vresult = _mm_shuffle_epi32(vresult, _MM_SHUFFLE(0, 3, 2, 1));
+    }
+  }
+}
+
 #endif
 
 void

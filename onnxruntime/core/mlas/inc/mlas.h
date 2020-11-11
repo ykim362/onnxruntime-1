@@ -672,6 +672,34 @@ MlasFindMinMaxElement(
     size_t N
     );
 
+void
+MLASCALL
+MlasQLinearGlobalAveragePool(
+    const uint8_t* Input,
+    float ScaleInput,
+    int32_t ZeroPointInput,
+    uint8_t* Output,
+    float ScaleOutput,
+    int32_t ZeroPointOutput,
+    size_t Channels,
+    size_t ImageSize
+    );
+
+template<typename T>
+void
+MLASCALL
+MlasNhwcGlobalAveragePool(
+    const uint8_t* Input,
+    float ScaleInput,
+    int32_t ZeroPointInput,
+    uint8_t* Output,
+    float ScaleOutput,
+    int32_t ZeroPointOutput,
+    size_t BatchSize,
+    size_t ImageSize,
+    size_t Channels
+    );
+
 //
 // InputA is of size N,
 // Input B is of size 1 if IsScalarB == true, otherwise it is of size N
