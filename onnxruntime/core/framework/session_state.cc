@@ -829,6 +829,7 @@ Status SessionState::LoadFromOrtFormat(const fbs::SessionState& fbs_session_stat
         return Status::OK();
       };
 
+  // process the nodes that existed when the model was created
   for (flatbuffers::uoffset_t i = 0; i < node_indices->size(); i++) {
     auto node_idx = node_indices->Get(i);
     auto kernel_hash = kernel_def_hashes->Get(i);

@@ -85,10 +85,12 @@ Status KernelRegistryManager::SearchKernelRegistry(const onnxruntime::Node& node
     return Status(ONNXRUNTIME, FAIL, create_error_message("The node is not placed on any Execution Provider. "));
   }
 
-#if !defined(ORT_MINIMAL_BUILD)
+#if !defined(ORT_MINIMAL_BUILD_NO_CUSTOM_EPS)
   for (auto& registry : custom_kernel_registries_) {
     status = registry->TryFindKernel(node, std::string(), kernel_def_hash, kernel_create_info);
-    if (status.IsOK()) return status;
+    if (status.IsOK()) {
+      return status;
+    }
   }
 #endif
 
