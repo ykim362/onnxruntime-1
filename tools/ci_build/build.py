@@ -405,7 +405,7 @@ def parse_arguments():
 
     # options to reduce binary size
     parser.add_argument("--minimal_build", action='store',
-                        const='off', default='on', nargs='?', type=str.lower,
+                        const='on', default='off', nargs='?', type=str.lower,
                         help="Create a build that only supports ORT format models. "
                         "See /docs/ONNX_Runtime_Format_Model_Usage.md for more information. "
                         "RTTI is automatically disabled in a minimal build. "
