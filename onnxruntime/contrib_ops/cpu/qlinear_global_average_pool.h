@@ -10,9 +10,9 @@
 namespace onnxruntime {
 namespace contrib {
 
-class QuantizedGlobalAveragePool final : public OpKernel {
+class QLinearGlobalAveragePool final : public OpKernel {
  public:
-  QuantizedGlobalAveragePool(const OpKernelInfo& info) : OpKernel(info) {
+  QLinearGlobalAveragePool(const OpKernelInfo& info) : OpKernel(info) {
     int64_t nchw_layout;
     ORT_ENFORCE(info.GetAttr("nchw", &nchw_layout).IsOK());
     storage_order_ = nchw_layout ? StorageOrder::NCHW : StorageOrder::NHWC;

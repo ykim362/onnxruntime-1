@@ -1984,11 +1984,11 @@ with the exception that numpy default keepdims to False instead of True.)DOC")
       .FillUsing(QLinearMathDocGenerator("multiplication",
                                          "C = ((A - A_zero_point) * (B - B_zero_point)) * (A_scale * B_scale)/C_scale + C_zero_point"));
 
-  ONNX_CONTRIB_OPERATOR_SCHEMA(QuantizedGlobalAveragePool)
+  ONNX_CONTRIB_OPERATOR_SCHEMA(QLinearGlobalAveragePool)
       .SetDomain(kMSDomain)
       .SinceVersion(1)
       .SetDoc(R"DOC(
-QuantizedGlobalAveragePool consumes an input tensor X and applies Average pooling across
+QLinearGlobalAveragePool consumes an input tensor X and applies Average pooling across
 the values in the same channel. This is equivalent to AveragePool with kernel size
 equal to the spatial dimension of input tensor. Input is of type uint8_t or int8_t.
 )DOC")
@@ -2006,6 +2006,26 @@ equal to the spatial dimension of input tensor. Input is of type uint8_t or int8
           "of the data. For non image case, the dimensions are "
           "in the form of (N x C x D1 x D2 ... Dn), "
           "where N is the batch size.",
+          "T")
+      .Input(
+          1,
+          "x_scale",
+          "Scale of quantized input 'X'. It must be a scalar.",
+          "tensor(float)")
+      .Input(
+          2,
+          "x_zero_point",
+          "Zero point tensor for input 'X'. It must be a scalar.",
+          "T")
+      .Input(
+          3,
+          "y_scale",
+          "Scale of quantized output 'Y'. It must be a scalar.",
+          "tensor(float)")
+      .Input(
+          4,
+          "y_zero_point",
+          "Zero point tensor for output 'Y'. It must be a scalar.",
           "T")
       .Output(
           0,
@@ -2038,8 +2058,7 @@ equal to the spatial dimension of input tensor. Input is of type uint8_t or int8
         size_t n_input_dims = static_cast<size_t>(input_shape.dim_size() - 2);
 
         // (N, C, 1, 1, ..., 1) or (N, 1, 1, ..., 1, C)
-        auto output_shape =
-            ctx.getOutputType(0)->mutable_tensor_type()->mutable_shape();
+        auto output_shape = ctx.getOutputType(0)->mutable_tensor_type()->mutable_shape();
         *output_shape->add_dim() = input_shape.dim(0);
         if (nchw) {
           *output_shape->add_dim() = input_shape.dim(1);

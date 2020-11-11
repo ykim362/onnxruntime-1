@@ -2,6 +2,7 @@ import onnx
 from .base_operator import QuantOperatorBase
 from ..quant_utils import attribute_to_kwarg, ms_domain, QuantizedValue, QuantizedValueType
 
+
 class QGlobalAveragePool(QuantOperatorBase):
     def __init__(self, onnx_quantizer, onnx_node):
         super().__init__(onnx_quantizer, onnx_node)
@@ -14,13 +15,17 @@ class QGlobalAveragePool(QuantOperatorBase):
         if node.input[0] not in self.quantizer.quantized_value_map:
             self.quantizer.new_nodes += [node]
             return
+        quantized_input_value = self.quantizer.quantized_value_map[node.input[0]]
 
         # Create an entry for output quantized value
         quantized_input_value = self.quantizer.quantized_value_map[node.input[0]]
+        data_found, output_scale_name_from_parameter, output_zp_name_from_parameter, _, _ = \
+            self.quantizer._get_quantization_params(node.output[0])
+        output_scale_name = output_scale_name_from_parameter if data_found else quantized_input_value.scale_name
+        output_zp_name = output_zp_name_from_parameter if data_found else quantized_input_value.zp_name
         quantized_output_value = QuantizedValue(
             node.output[0], node.output[0] + "_quantized",
-            quantized_input_value.scale_name, quantized_input_value.zp_name,
-            QuantizedValueType.Input)  # Seem not fully flexible in current framework
+            output_scale_name, output_zp_name, quantized_input_value.qType)
         self.quantizer.quantized_value_map[node.output[0]] = quantized_output_value
 
         kwargs = {}
@@ -31,6 +36,8 @@ class QGlobalAveragePool(QuantOperatorBase):
         qnode_name = node.name + "_quant" if node.name != "" else ""
 
         qnode = onnx.helper.make_node(
-            "Quantized" + node.op_type, [quantized_input_value.q_name],
-            [quantized_output_value.q_name], qnode_name, **kwargs)
+            "QLinear" + node.op_type,
+            [quantized_input_value.q_name, quantized_input_value.scale_name, quantized_input_value.zp_name, output_scale_name, output_zp_name],
+            [quantized_output_value.q_name],
+            qnode_name, **kwargs)
         self.quantizer.new_nodes += [qnode]
