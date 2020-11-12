@@ -32,8 +32,6 @@ class Function {
 Create a new Function instance.
 @param graph The graph containing the Function.
 @param nodes_to_fuse the IndexedSubGraph to use for the Function.
-@param create_new_model If true will create a new Model in the Function body. If false a lightweight Function 
-                        implementation will be returned that has an OpSchema but no Body or IndexedSubGraph.
 */
 std::unique_ptr<Function> MakeFunction(const onnxruntime::Graph& graph,
                                        const IndexedSubGraph& nodes_to_fuse,

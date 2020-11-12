@@ -97,7 +97,7 @@ static Node* PlaceNode(Graph& graph, const IndexedSubGraph& capability,
     // in order of EP priority
     bool sub_graph_available_for_assignment = true;
     for (auto node_index : capability.nodes) {
-      auto* node = graph.GetNode(node_index);
+      const auto* node = graph.GetNode(node_index);
       if (nullptr == node || !node->GetExecutionProviderType().empty()) {
         // if mode is kAssignOnly we want all nodes that can _potentially_ be taken by compiling EPs to be assigned,
         // so that we aggregate the nodes covered and ensure the original nodes remain in the ORT format model by
@@ -132,14 +132,13 @@ static Node* PlaceNode(Graph& graph, const IndexedSubGraph& capability,
           fused_node = &graph.FuseSubGraph(capability, node_name);
         } else {
           // create a fused node without copying everything to a Function body. The IndexedSubGraph will be passed
-          // through to Compile via a filtered GraphViewer so we don't transfer ownership of it here.
+          // through to Compile via a filtered GraphViewer.
           fused_node = &graph.BeginFuseSubGraph(capability, node_name);
         }
 
         fused_node->SetExecutionProviderType(provider_type);
 
         // searching in kernel registries, if no kernel registered for the fused_node, use compile approach
-        // TODO: Shouldn't we delete the fused_node if there's a match in KernelRegistryManager?
         if (!KernelRegistryManager::HasImplementationOf(kernel_registry_mgr, *fused_node, provider_type)) {
           result = fused_node;
         }
@@ -314,7 +313,8 @@ static Status PartitionOnnxFormatModelImpl(Graph& graph, bool export_dll, FuncMa
 
   // if this is the main graph call Resolve to put the Graph back into a guaranteed good state
   // TODO: Graph::FuseSubGraph and Graph::FinalizeFuseSubGraph should now create valid edges so this call to
-  // Graph::Resolve should not be required. Need to test to validate that.
+  // Graph::Resolve should not be required. Need to test to validate that, especially if node being fused
+  // was a control flow node with its own subgraph as more than just the edges may need updating.
   if (!graph.IsSubgraph()) {
     ORT_RETURN_IF_ERROR(graph.Resolve());
   }

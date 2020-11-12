@@ -38,7 +38,7 @@ constexpr const char* kAclExecutionProvider = "ACLExecutionProvider";
 constexpr const char* kArmNNExecutionProvider = "ArmNNExecutionProvider";
 constexpr const char* kRocmExecutionProvider = "ROCMExecutionProvider";
 
-// EP used for internal testing 
+// EP used for internal testing
 constexpr const char* kInternalTestingExecutionProvider = "InternalTestingExecutionProvider";
 
 constexpr const char* providers_available[] = {
@@ -83,7 +83,7 @@ constexpr const char* providers_available[] = {
     kArmNNExecutionProvider,
 #endif
 #ifdef USE_ROCM
-  kRocmExecutionProvider,
+    kRocmExecutionProvider,
 #endif
 };
 
