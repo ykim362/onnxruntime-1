@@ -153,7 +153,7 @@ static Node* PlaceNode(Graph& graph, const IndexedSubGraph& capability,
           if (node != nullptr) {
             node->SetExecutionProviderType(provider_type);
           }
-        }               
+        }
       }
     }
   }
@@ -366,23 +366,23 @@ static Status InlineNodes(Graph& graph, bool& modified_graph) {
 
 Status GraphPartitioner::PartitionOnnxFormatModel(Graph& graph, bool export_dll, FuncManager& func_mgr,
                                                   KernelRegistry& fused_kernel_registry, Mode mode) const {
-  // process full graph with each EP
-  for (const auto& ep : providers_) {
-    ORT_RETURN_IF_ERROR(PartitionOnnxFormatModelImpl(graph, export_dll, func_mgr, kernel_registry_mgr_,
-                                                     fused_kernel_registry, *ep, mode));
-  }
-
   bool modified_graph = false;
-  ORT_RETURN_IF_ERROR(InlineNodes(graph, modified_graph));
-
-  // Resolve and rerun graph partition
-  if (modified_graph) {
-    ORT_RETURN_IF_ERROR(graph.Resolve());
+  do {
+    // process full graph with each EP
     for (const auto& ep : providers_) {
       ORT_RETURN_IF_ERROR(PartitionOnnxFormatModelImpl(graph, export_dll, func_mgr, kernel_registry_mgr_,
                                                        fused_kernel_registry, *ep, mode));
     }
-  }
+
+    // expand any nodes that have an ONNX function definition but no matching ORT kernel.
+    modified_graph = false;
+    ORT_RETURN_IF_ERROR(InlineNodes(graph, modified_graph));
+
+    // Resolve and rerun graph partitioning and inlining if there was a change
+    if (modified_graph) {
+      ORT_RETURN_IF_ERROR(graph.Resolve());
+    }
+  } while (modified_graph);
 
   return Status::OK();
 }

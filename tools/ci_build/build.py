@@ -98,6 +98,8 @@ def parse_arguments():
     parser.add_argument(
         "--use_horovod", action='store_true', help="Enable Horovod.")
     parser.add_argument(
+        "--disable_nccl", action='store_true', help="Disable Nccl.")
+    parser.add_argument(
         "--mpi_home", help="Path to MPI installation dir")
     parser.add_argument(
         "--nccl_home", help="Path to NCCL installation dir")
@@ -732,6 +734,8 @@ def generate_build_tree(cmake_path, source_dir, build_dir, cuda_home, cudnn_home
             "ON" if args.enable_training else "OFF"),
         "-Donnxruntime_USE_HOROVOD=" + (
             "ON" if args.use_horovod else "OFF"),
+        "-Donnxruntime_USE_NCCL=" + (
+            "OFF" if args.disable_nccl else "ON"),
         "-Donnxruntime_BUILD_BENCHMARKS=" + (
             "ON" if args.build_micro_benchmarks else "OFF"),
         "-Donnxruntime_USE_ROCM=" + ("ON" if args.use_rocm else "OFF"),
@@ -1358,13 +1362,6 @@ def run_onnxruntime_tests(args, source_dir, ctest_path, build_dir, configs):
     for config in configs:
         log.info("Running tests for %s configuration", config)
         cwd = get_config_build_dir(build_dir, config)
-
-        if args.enable_training and args.use_cuda and args.enable_training_python_frontend_e2e_tests:
-            # run frontend tests for orttraining-linux-gpu-frontend_test-ci-pipeline.
-            # this is not a PR merge test so skip other non-frontend tests.
-            run_training_python_frontend_e2e_tests(cwd=cwd)
-            run_training_python_frontend_tests(cwd=cwd)
-            continue
 
         if args.enable_training and args.use_cuda and args.enable_training_pipeline_e2e_tests:
             # run distributed pipeline test on 4-GPU CI machine.
