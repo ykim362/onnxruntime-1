@@ -414,7 +414,7 @@ def parse_arguments():
                         "See /docs/ONNX_Runtime_Format_Model_Usage.md for more information. "
                         "RTTI is automatically disabled in a minimal build. "
                         "To enable execution providers that compile kernels at runtime (e.g. NNAPI) pass 'extended' "
-                        "as a parameter. e.g. `--minimal_build extended`.")
+                        "as a parameter. e.g. '--minimal_build extended'.")
     parser.add_argument("--include_ops_by_model", type=str, help="include ops from model(s) under designated path.")
     parser.add_argument("--include_ops_by_config", type=str,
                         help="include ops from config file. "
