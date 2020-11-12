@@ -71,6 +71,10 @@ class TrainingSession : public InferenceSession {
       // The number of pipeline stages.
       int pipeline_parallel_size{1};
 
+      int original_batch_size{1};
+
+      int pipeline_batch_size{1};
+
       int num_pipeline_steps{1};
 
       int pipeline_stage_id{0};
@@ -351,7 +355,8 @@ class TrainingSession : public InferenceSession {
       IOBinding& io_binding, IOBinding& sub_io_binding,
       const size_t slice_id, const size_t slice_axis,
       const size_t num_slices);
-  // Slice inputs into sub-tensors along a specified axis.
+
+  void LaunchNcclService(const int pipeline_stage_id);
 
   /** Configures the loss function.
   The loss function can either be provided externally or built from the provided loss function information.
@@ -425,7 +430,8 @@ class TrainingSession : public InferenceSession {
   common::Status InsertPipelineOps(const std::unordered_set<std::string>& initializer_names_to_preserve,
                                    std::vector<std::string> graph_output_names,
                                    std::vector<ONNX_NAMESPACE::TensorShapeProto> graph_output_shapes,
-                                   pipeline::PipelineTensorNames& pipeline_tensor_names);
+                                   pipeline::PipelineTensorNames& pipeline_tensor_names,
+                                   const size_t batch_size);
 
   common::Status ApplyTransformationsToMainGraph(std::unordered_set<std::string>& weights_to_train,
                                                  const TrainingConfiguration::GraphTransformerConfiguration& config,

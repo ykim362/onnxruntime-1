@@ -6,7 +6,7 @@
 #include "core/providers/cuda/math/binary_elementwise_ops.h"
 #include "orttraining/training_ops/cuda/optimizer/common.h"
 #include "orttraining/training_ops/cuda/optimizer/adam.h"
-
+#include "core/profile/context.h"
 namespace onnxruntime {
 namespace cuda {
 
@@ -121,6 +121,22 @@ Status AdamOptimizer<T1, T2, T3, T4, T_GRAD, T_GRAD_NORM, T_MIXED_PRECISION_FP>:
 
       return Status::OK();
     }
+  }
+
+  auto& profile_context = profile::Context::GetInstance();
+  const auto tag = profile_context.GetThreadTagOrDefault(std::this_thread::get_id());
+
+  auto input_defs = Node().InputDefs();
+  std::vector<T3> buffer(W.Shape().Size());
+  cudaMemcpy(buffer.data(), reinterpret_cast<const CudaT3*>(W.template Data<T3>()), W.Shape().Size() * sizeof(CudaT3), cudaMemcpyDeviceToHost);
+  for (int i = 0; i < W.Shape().Size(); ++i) {
+    std::cout << "[adam.cc] batch " << tag << ", " << input_defs[2]->Name() << "[" << i << "]=" << buffer[i] << std::endl;
+  }
+
+  std::vector<T_GRAD> g_buffer(G.Shape().Size());
+  cudaMemcpy(g_buffer.data(), reinterpret_cast<const CudaT_GRAD*>(G.template Data<T_GRAD>()), G.Shape().Size() * sizeof(T_GRAD), cudaMemcpyDeviceToHost);
+  for (int i = 0; i < G.Shape().Size(); ++i) {
+    std::cout << "[adam.cc] batch " << tag << ", " << input_defs[3]->Name() << "[" << i << "]=" << g_buffer[i] << std::endl;
   }
 
   AdamOptimizerImpl(

@@ -151,6 +151,35 @@ void TrainingSession::FilterUnusedWeights(const std::unordered_set<std::string>&
 
 const std::string TrainingSession::training_mode_string_ = "training_mode";
 
+void TrainingSession::LaunchNcclService(const int pipeline_stage_id) {
+  auto& nccl_service = cuda::NcclService::GetInstance();
+
+  // Create NCCL communication plan. The plan is a vector of communication task group.
+  // Each communication task group contains tasks which should be done in parallel.
+  nccl_service.PlanStart();
+  for (auto& slot : pipeline_schedule_.GetSchedule(pipeline_stage_id)) {
+    if (!slot.HasCommute()) {
+      continue;
+    }
+    // Create communication tasks done in parallel.
+    nccl_service.PlanNewGroupStart();
+    for (auto& task : slot.GetTasks()) {
+      if (task.type == pipeline::PipelineTask::Type::Send) {
+        nccl_service.PlanSend(task.peer_rank);
+      } else if (task.type == pipeline::PipelineTask::Type::Recv) {
+        nccl_service.PlanRecv(task.peer_rank);
+      }
+    }
+    // Mark the end of a parallel communication task group.
+    nccl_service.PlanNewGroupEnd();
+  }
+    // Mark the end of the entire communication plan.
+  nccl_service.PlanEnd();
+
+  // Launch NCCL service to execute the plan.
+  nccl_service.Launch();
+}
+
 Status TrainingSession::ConfigureForTraining(
     const TrainingConfiguration& config, TrainingConfigurationResult& config_result_out) {
   ORT_RETURN_IF(
@@ -334,7 +363,8 @@ Status TrainingSession::ConfigureForTraining(
     ORT_RETURN_IF_ERROR(InsertPipelineOps(weight_names_to_train,
                                           graph_output_names,
                                           graph_output_shapes,
-                                          pipeline_result.pipeline_tensor_names));
+                                          pipeline_result.pipeline_tensor_names,
+                                          config.distributed_config.pipeline_batch_size));
 
     // Records which which tensors can be fed into the graph.
     // It may be different than the original graph because of extra event tensors.
@@ -362,12 +392,31 @@ Status TrainingSession::ConfigureForTraining(
     pipeline_context_.pipeline_tensor_names = pipeline_result.pipeline_tensor_names;
     pipeline_context_.num_pipeline_steps = num_pipeline_steps;
     pipeline_context_.num_pipeline_stages = config.distributed_config.pipeline_parallel_size;
+    pipeline_context_.pipeline_batch_size = config.distributed_config.pipeline_batch_size;
+    pipeline_context_.original_batch_size = config.distributed_config.original_batch_size;
     pipeline_context_.pipeline_stage_id = pipeline_result.pipeline_stage_id;
     pipeline_context_.slice_input_names = config.distributed_config.slice_input_names;
     pipeline_context_.slice_output_names = config.distributed_config.slice_output_names;
 
+    // Create a local function to append non-empty name to fetch_names list.
+    auto append_non_empty_name = [&](const std::string& name) {
+      if (!name.empty()) {
+        pipeline_context_.accumulation_step_fetches.push_back(name);
+      }
+    };
+
+    // Append first output of each event operator to fetch_names list to make sure all event ops will
+    // be computed.
+    pipeline_context_.pipeline_tensor_names.ForEachOutputName(append_non_empty_name);
+
     // Return pipeline configuration back.
     config_result.pipeline_config_result = pipeline_result;
+  } else {
+    pipeline_schedule_ = pipeline::PipelineScheduler(1, config.distributed_config.pipeline_parallel_size);
+    pipeline_worker_pool_ = pipeline::PipelineWorkerPool(config.distributed_config.pipeline_parallel_size);
+    pipeline_context_.num_pipeline_steps = 1;
+    pipeline_context_.num_pipeline_stages = config.distributed_config.pipeline_parallel_size;
+    pipeline_context_.pipeline_stage_id = DistributedRunContext::GroupId(WorkerGroupType::ModelParallel);
   }
 
   // All non-float tensors are not trainable. Remove those weights.
@@ -397,7 +446,15 @@ Status TrainingSession::ConfigureForTraining(
         opt_graph_config, opt_node_configs,
         optimizer_config_result.output_key_to_graph_output_name));
 
-    config_result.opt_config_result = optimizer_config_result;
+
+    const bool is_gradient_accumulation_enabled = opt_graph_config_.gradient_accumulation_steps > 1;
+    if (is_gradient_accumulation_enabled) {
+      const auto& opt_output_key_to_graph_output_name =
+          optimizer_config_result.output_key_to_graph_output_name;
+      const auto it = opt_output_key_to_graph_output_name.find(OptimizerOutputKey::GradientAccumulation);
+      ORT_RETURN_IF(it == opt_output_key_to_graph_output_name.end(), "Gradient accumulation output is missing in the optimizer output");
+      pipeline_context_.accumulation_step_fetches.push_back(it->second);
+    }
   } else {
     if (config.gradient_accumulation_steps > 1) {
       ORT_RETURN_IF_ERROR(BuildAccumulationNode(weights_to_train_));
@@ -445,6 +502,9 @@ Status TrainingSession::ConfigureForTraining(
     ORT_RETURN_IF_ERROR(AddGistEncoding());
   }
 
+  ORT_IGNORE_RETURN_VALUE(Save(
+      std::string("pp_") + std::string(std::to_string(config.distributed_config.world_rank)) + std::string(".onnx"), SaveOption::NO_RELOAD));
+
   // If the current node is in rank0 or if the current session is running pipeline (in which case different rank would
   // store different model partition), and if model_with_training_graph_path is specified, save the model.
   // Note: in the pipeline case, different ranks may resident in the same node. This could lead to a potential write
@@ -472,28 +532,11 @@ Status TrainingSession::ConfigureForTraining(
     }
 
 #if defined(USE_NCCL) && defined(USE_NCCL_P2P)
-    // Create NCCL communication plan.
-    auto& nccl_service = cuda::NcclService::GetInstance();
-
-    nccl_service.PlanStart();
-    for (auto& slot : pipeline_schedule_.GetSchedule(config_result.pipeline_config_result.value().pipeline_stage_id)) {
-      if (!slot.HasCommute()) {
-        continue;
-      }
-      nccl_service.PlanNewGroupStart();
-      for (auto& task : slot.GetTasks()) {
-        if (task.type == pipeline::PipelineTask::Type::Send) {
-          nccl_service.PlanSend(task.peer_rank);
-        } else if (task.type == pipeline::PipelineTask::Type::Recv) {
-          nccl_service.PlanRecv(task.peer_rank);
-        }
-      }
-      nccl_service.PlanNewGroupEnd();
-    }
-    nccl_service.PlanEnd();
-
-    // Launch NCCL service to execute the plan.
-    nccl_service.Launch();
+    LaunchNcclService(config_result.pipeline_config_result.value().pipeline_stage_id);
+#endif
+  } else {
+#if defined(USE_NCCL) && defined(USE_NCCL_P2P)
+    LaunchNcclService(pipeline_context_.pipeline_stage_id);
 #endif
   }
 
@@ -721,12 +764,14 @@ Status TrainingSession::InsertPipelineOps(
     const std::unordered_set<std::string>& initializer_names_to_preserve,
     std::vector<std::string> graph_output_names,
     std::vector<ONNX_NAMESPACE::TensorShapeProto> graph_output_shapes,
-    pipeline::PipelineTensorNames& pipeline_tensor_names) {
+    pipeline::PipelineTensorNames& pipeline_tensor_names,
+    const size_t batch_size) {
   ORT_RETURN_IF_ERROR(TransformGraphForPipeline(
       model_->MainGraph(),
       initializer_names_to_preserve,
       graph_output_names,
       graph_output_shapes,
+      batch_size,
       pipeline_tensor_names.forward_recv_waited_event_name,
       pipeline_tensor_names.forward_recv_wait_output_name,
       pipeline_tensor_names.forward_recv_recorded_event_name,
@@ -1159,7 +1204,7 @@ common::Status TrainingSession::RunWithPipeline(const RunOptions& run_options, I
   // TODO: add it to distributed config.
   const size_t slice_axis = 0;
   // TODO: add it to distributed config.
-  const size_t num_steps = pipeline_context_.num_pipeline_steps;
+  const size_t num_steps = pipeline_context_.original_batch_size / pipeline_context_.pipeline_batch_size;
   const size_t stage_id = pipeline_context_.pipeline_stage_id;
   // TODO: add it to distributed config.
   const bool training_mode = true;
@@ -1186,23 +1231,38 @@ common::Status TrainingSession::RunWithPipeline(const RunOptions& run_options, I
         profile_context.SetThreadTag(
             std::this_thread::get_id(), std::to_string(step));
 
-        auto status = InferenceSession::Run(
-              run_options,
-              sub_io_bindings[step]->GetInputNames(),
-              sub_io_bindings[step]->GetInputs(),
-              sub_io_bindings[step]->GetOutputNames(),
-              &sub_io_bindings[step]->GetOutputs());
+        if (step == num_steps - 1) {
+          RunOptions run_options_ = run_options;
+          run_options_.only_execute_path_to_fetches = false;
+          auto status = InferenceSession::Run(
+                run_options_,
+                sub_io_bindings[step]->GetInputNames(),
+                sub_io_bindings[step]->GetInputs(),
+                sub_io_bindings[step]->GetOutputNames(),
+                &sub_io_bindings[step]->GetOutputs());
+          ORT_THROW_IF_ERROR(status);
+        } else {
+          RunOptions run_options_ = run_options;
+          run_options_.only_execute_path_to_fetches = true;
+          std::vector<OrtValue> fetches;
+          auto status = InferenceSession::Run(
+                run_options_,
+                sub_io_bindings[step]->GetInputNames(),
+                sub_io_bindings[step]->GetInputs(),
+                pipeline_context_.accumulation_step_fetches,
+                &fetches);
+          ORT_THROW_IF_ERROR(status);
+        }
       }, i);
-
-      ORT_THROW_IF_ERROR(status);
     } else {
+      RunOptions run_options_ = run_options;
+      run_options_.only_execute_path_to_fetches = false;
       auto status = InferenceSession::Run(
-            run_options,
+            run_options_,
             sub_io_binding->GetInputNames(),
             sub_io_binding->GetInputs(),
             sub_io_binding->GetOutputNames(),
             &sub_io_binding->GetOutputs());
-
       ORT_THROW_IF_ERROR(status);
     }
   }

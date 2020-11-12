@@ -53,6 +53,8 @@ struct TrainingParameters {
   int horizontal_parallel_size = 1;
   int pipeline_parallel_size = 1;
   int num_pipeline_steps = 1;
+  int original_batch_size = 1;
+  int pipeline_batch_size = 1;
   int deepspeed_zero_stage = 0;
   bool enable_grad_norm_clip = true;
   bool set_gradients_as_graph_outputs = false;
@@ -108,6 +110,8 @@ TrainingConfigurationResult ConfigureSessionForTraining(
   config.distributed_config.data_parallel_size = parameters.data_parallel_size;
   config.distributed_config.horizontal_parallel_size = parameters.horizontal_parallel_size;
   config.distributed_config.pipeline_parallel_size = parameters.pipeline_parallel_size;
+  config.distributed_config.original_batch_size = parameters.original_batch_size;
+  config.distributed_config.pipeline_batch_size = parameters.pipeline_batch_size;
   config.distributed_config.num_pipeline_steps = parameters.num_pipeline_steps;
 
   if (parameters.use_mixed_precision) {
@@ -117,14 +121,7 @@ TrainingConfigurationResult ConfigureSessionForTraining(
     config.mixed_precision_config = mp;
   }
 
-  // std::cout << "[ConfigureSessionForTraining] pipeline_config" << std::endl;
-  // training::TrainingSession::TrainingConfiguration::PipelineConfiguration pipeline_config;
-  // pipeline_config.do_partition = true;
-  // training::TrainingSession::TrainingConfiguration::CutEdge cut_edge0("12");
-  // training::TrainingSession::TrainingConfiguration::CutInfo cut_info{cut_edge0};
-  // pipeline_config.cut_list.push_back(cut_info);
-  // config.pipeline_config = pipeline_config;
-  if (config.distributed_config.pipeline_parallel_size > 0) {
+  if (config.distributed_config.pipeline_parallel_size > 1) {
     training::TrainingSession::TrainingConfiguration::PipelineConfiguration pipeline_config;
 
     // Currently don't support auto-partition. User needs to pass in cut information for pipeline
@@ -280,6 +277,8 @@ void addObjectMethodsForTraining(py::module& m) {
       .def_readwrite("data_parallel_size", &TrainingParameters::data_parallel_size)
       .def_readwrite("horizontal_parallel_size", &TrainingParameters::horizontal_parallel_size)
       .def_readwrite("pipeline_parallel_size", &TrainingParameters::pipeline_parallel_size)
+      .def_readwrite("original_batch_size", &TrainingParameters::original_batch_size)
+      .def_readwrite("pipeline_batch_size", &TrainingParameters::pipeline_batch_size)
       .def_readwrite("pipeline_cut_info_string", &TrainingParameters::pipeline_cut_info_string)
       .def_readwrite("num_pipeline_steps", &TrainingParameters::num_pipeline_steps)
       .def_readwrite("gradient_accumulation_steps", &TrainingParameters::gradient_accumulation_steps)

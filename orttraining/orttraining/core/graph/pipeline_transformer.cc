@@ -13,7 +13,7 @@ using namespace onnxruntime::graph_utils;
 namespace onnxruntime {
 namespace training {
 
-void CreateFakeOutput(Graph& graph, std::string output_name, const ONNX_NAMESPACE::TensorShapeProto* reference_shape_proto) {
+void CreateFakeOutput(Graph& graph, std::string output_name, const ONNX_NAMESPACE::TensorShapeProto* reference_shape_proto, const int batch_size) {
   const int32_t element_type = ONNX_NAMESPACE::TensorProto_DataType_FLOAT;
   ONNX_NAMESPACE::TypeProto type_proto;
   type_proto.mutable_tensor_type()->set_elem_type(element_type);
@@ -27,7 +27,8 @@ void CreateFakeOutput(Graph& graph, std::string output_name, const ONNX_NAMESPAC
   int64_t reference_size = 1;
   for (auto d: reference_shape_proto->dim()) {
     // TODO: this "2" should be computed by applying Shape operator on input.
-    int64_t dim_value = d.dim_value() != 0 ? d.dim_value() : 2;
+    int64_t dim_value = d.dim_value() != 0 ? d.dim_value() : batch_size;
+    std::cout << "[pipeline_transformer.cc] dim_value: " << dim_value << std::endl;
     tensor_proto.add_dims(dim_value);
     reference_size *= dim_value;
   }
@@ -437,6 +438,7 @@ Status TransformGraphForPipeline(
     const std::unordered_set<std::string>& weights_to_train,
     std::vector<std::string> graph_output_names,
     std::vector<ONNX_NAMESPACE::TensorShapeProto> graph_output_shapes,
+    const size_t batch_size,
     std::string& forward_recv_waited_event_name,
     std::string& forward_recv_wait_output_name,
     std::string& forward_recv_recorded_event_name,
@@ -699,7 +701,7 @@ Status TransformGraphForPipeline(
       continue;
     }
     // TODO: this function should create fake output based on input shape.
-    CreateFakeOutput(graph, name, &shape); 
+    CreateFakeOutput(graph, name, &shape, batch_size); 
     new_output_names.push_back(name);
   }
 

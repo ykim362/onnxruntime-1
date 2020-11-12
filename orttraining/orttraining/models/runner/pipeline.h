@@ -306,13 +306,15 @@ struct PipelineTensorNames {
 
 struct PipelineContext {
   // Number of pipeline stages.
-  int num_pipeline_stages;
+  int num_pipeline_stages{1};
   // Id of stage handled by this process. Currently, it matches the MPI's rank.
-  int pipeline_stage_id;
+  int pipeline_stage_id{0};
+  int original_batch_size{1};
+  int pipeline_batch_size{1};
   // The number of batches per pipeline round.
   // Only the last step among num_gradient_accumulation_steps steps may call
   // optimizer to update the model.
-  int num_pipeline_steps;
+  int num_pipeline_steps{1};
   // Names of scheduling event in graph's input list and
   // names of event ops' outputs. If an event name is an
   // empty string, it means no event should be waited or recorded.
@@ -323,6 +325,11 @@ struct PipelineContext {
   // Allowed fetch names.
   // Values can be fetched at this pipeline stage.
   std::vector<std::string> fetch_names;
+
+  // When running training session with multiple sub-batches, only the last sub-batch run
+  // should execute the optimizer nodes and update the model. All non-last sub-batches should
+  // only execute until gradient accumulation step.
+  std::vector<std::string> accumulation_step_fetches;
 
   std::unordered_set<std::string> slice_input_names;
   std::unordered_set<std::string> slice_output_names;
