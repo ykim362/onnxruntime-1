@@ -1131,38 +1131,34 @@ common::Status InferenceSession::Initialize() {
     // Register 2nd registries into KernelRegistryManager.
     ORT_RETURN_IF_ERROR_SESSIONID_(kernel_registry_manager_.RegisterKernels(execution_providers_));
 
+    bool loading_ort_format = !ort_format_model_bytes_.empty();
 #if !defined(ORT_MINIMAL_BUILD)
-    // add predefined transformers
-    AddPredefinedTransformers(graph_transformation_mgr_, session_options_.graph_optimization_level,
-                              transformers_to_enable_);
+    if (!loading_ort_format) {
+      // add predefined transformers
+      AddPredefinedTransformers(graph_transformation_mgr_, session_options_.graph_optimization_level,
+                                transformers_to_enable_);
 
-    // apply any transformations to the main graph and any subgraphs
-    ORT_RETURN_IF_ERROR_SESSIONID_(TransformGraph(graph, graph_transformation_mgr_,
-                                                  execution_providers_, kernel_registry_manager_,
-                                                  insert_cast_transformer_,
-                                                  *session_state_));
+      // apply any transformations to the main graph and any subgraphs
+      ORT_RETURN_IF_ERROR_SESSIONID_(TransformGraph(graph, graph_transformation_mgr_,
+                                                    execution_providers_, kernel_registry_manager_,
+                                                    insert_cast_transformer_,
+                                                    *session_state_));
 
-    // now that all the transforms are done, call Resolve on the main graph. this will recurse into the subgraphs.
-    ORT_RETURN_IF_ERROR_SESSIONID_(graph.Resolve());
+      // now that all the transforms are done, call Resolve on the main graph. this will recurse into the subgraphs.
+      ORT_RETURN_IF_ERROR_SESSIONID_(graph.Resolve());
 
-    // Update temporary copies of metadata, input- and output definitions to the same state as the resolved graph
-    ORT_RETURN_IF_ERROR_SESSIONID_(SaveModelMetadata(*model_));
+      // Update temporary copies of metadata, input- and output definitions to the same state as the resolved graph
+      ORT_RETURN_IF_ERROR_SESSIONID_(SaveModelMetadata(*model_));
+    }
 #endif  // !defined(ORT_MINIMAL_BUILD)
 
     // need to keep the initializers if we're going to save the optimized model
     bool keep_initializers = !session_options_.optimized_model_filepath.empty();
 
-    // we only want to use the serialized session state in a minimal build.
-    // in a full build, even if we loaded from an ORT format model, optimizers may have run and changed the
-    // graph, which would result in it no longer matching the saved session state.
-    // as it's a full build we can create the SessionState as per usual using kernel lookups, so we can take the safe
-    // option and ignore the serialized session state.
-    const experimental::fbs::SessionState* serialized_session_state = nullptr;
-#if defined(ORT_MINIMAL_BUILD)
-    serialized_session_state = !ort_format_model_bytes_.empty()
-                                   ? fbs::GetInferenceSession(ort_format_model_bytes_.data())->session_state()
-                                   : nullptr;
-#endif
+    const experimental::fbs::SessionState* serialized_session_state =
+        loading_ort_format
+            ? fbs::GetInferenceSession(ort_format_model_bytes_.data())->session_state()
+            : nullptr;
 
     ORT_RETURN_IF_ERROR_SESSIONID_(session_state_->FinalizeSessionState(model_location_, kernel_registry_manager_,
                                                                         session_options_,
