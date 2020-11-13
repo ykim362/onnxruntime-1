@@ -90,6 +90,7 @@ Status QLinearGlobalAveragePool::Compute(OpKernelContext* context) const {
   auto dtype = X.GetElementType();
   switch (dtype) {
     case ONNX_NAMESPACE::TensorProto_DataType_UINT8:
+      std::cout << "====GlobalAveragePool: NxCxImageSize=" << N << "x" << C << "x" << kernel_dims << std::endl;
       return ComputeAveragePool(X.Data<uint8_t>(), x_scale, *(tensor_x_zero_point->Data<uint8_t>()),
                                 Y.MutableData<uint8_t>(), y_scale, *(tensor_y_zero_point->Data<uint8_t>()),
                                 N, C, kernel_dims, storage_order_, tp);

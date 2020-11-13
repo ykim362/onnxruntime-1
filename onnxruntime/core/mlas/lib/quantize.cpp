@@ -19,6 +19,7 @@ Abstract:
 --*/
 
 #include "mlasi.h"
+#include <cassert>
 
 #if defined(MLAS_NEON64_INTRINSICS) || defined(MLAS_SSE2_INTRINSICS)
 
@@ -695,44 +696,322 @@ MlasQLinearGlobalAveragePool(
     size_t Channels,
     size_t ImageSize
     ) {
-  const auto vscale = MlasBroadcastFloat32x4(ScaleInput / ScaleOutput);
-  const auto vbias = MlasBroadcastInt32x4(gsl::narrow_cast<int32_t>(-1 * ZeroPointInput));
+    const auto vscale = MlasBroadcastFloat32x4(ScaleInput / ScaleOutput);
+    const auto vbias = MlasBroadcastInt32x4(gsl::narrow_cast<int32_t>(-1 * ZeroPointInput));
+    const auto vmin_value = MlasBroadcastFloat32x4(float(0 - ZeroPointOutput));
+    const auto vmax_value = MlasBroadcastFloat32x4(float(255 - ZeroPointOutput));
+    const auto vzero_point = MlasBroadcastInt32x4(ZeroPointOutput);
+
+    int32_t sum_buffer[4];
+    int sum_count = 0;
+    for (; Channels > 0; Channels--) {
+        MlasReduceSumU8(Input, sum_buffer + sum_count, ImageSize);
+        sum_buffer[sum_count] /= (int32_t)ImageSize;
+        Input += ImageSize;
+        ++sum_count;
+        if (sum_count == 4) {
+            auto vsum = _mm_load_si128((__m128i*)sum_buffer);
+            auto vresult = MlasRequantizeOutputVector(vsum, vbias, vscale, vmin_value, vmax_value, vzero_point);
+            vresult = _mm_packus_epi16(vresult, vresult);
+            vresult = _mm_packus_epi16(vresult, vresult);
+            *((int32_t*)Output) = _mm_cvtsi128_si32(vresult);
+            sum_count = 0;
+            Output += 4;
+        }
+    }
+    if (sum_count > 0) {
+        auto vsum = _mm_load_si128((__m128i*)sum_buffer);
+        auto vresult = MlasRequantizeOutputVector(vsum, vbias, vscale, vmin_value, vmax_value, vzero_point);
+        for (; sum_count > 0; --sum_count) {
+            *Output++ = (uint8_t)_mm_cvtsi128_si32(vresult);
+            vresult = _mm_shuffle_epi32(vresult, _MM_SHUFFLE(0, 3, 2, 1));
+        }
+    }
+}
+
+void
+MLASCALL
+MlasNhwcQLinearGlobalAveragePoolSingleBatch(
+    const uint8_t* Input,
+    uint8_t* Output,
+    const uint8_t* InputEnd,
+    int32_t Bias,
+    float Scale,
+    int32_t ZeroPointOutput,
+    int32_t* AccumulateBuffer,
+    const uint8_t* ZeroBuffer,
+    size_t ImageSize,
+    size_t Channels,
+    size_t Stride,
+    ) {
+  assert(Channels > 1);
+  assert(Channels <= Stride);
+
+  bool finish_one_pass = false;
+  const __m128i vbias = _mm_set1_epi32(Bias);
+  const __m128i vzero = _mm_setzero_si128();
+  const auto vscale = MlasBroadcastFloat32x4(Scale);
   const auto vmin_value = MlasBroadcastFloat32x4(float(0 - ZeroPointOutput));
   const auto vmax_value = MlasBroadcastFloat32x4(float(255 - ZeroPointOutput));
   const auto vzero_point = MlasBroadcastInt32x4(ZeroPointOutput);
-  (void)vscale;
-  (void)vbias;
-  (void)vmax_value;
-  (void)vmin_value;
-  (void)vzero_point;    
 
-  int32_t sum_buffer[4];
-  int sum_count = 0;
-  for (; Channels > 0; Channels--) {
-    MlasReduceSumU8(Input, sum_buffer + sum_count, ImageSize);
-    sum_buffer[sum_count] /= (int32_t)ImageSize;
-    Input += ImageSize;
-    ++sum_count;
-    if (sum_count == 4) {
-      auto vsum = _mm_load_si128((__m128i*)sum_buffer);
-      auto vresult = MlasRequantizeOutputVector(vsum, vbias, vscale, vmin_value, vmax_value, vzero_point);
+#define LOAD_FULL_CHANNELS() \
+  const __m128i vi0 = _mm_loadl_epi64((const __m128i*)i0); \
+  i0 += 8; \
+  const __m128i vi1 = _mm_loadl_epi64((const __m128i*)i1);\
+  i1 += 8;\
+  const __m128i vi2 = _mm_loadl_epi64((const __m128i*)i2);\
+  i2 += 8;\
+  const __m128i vi3 = _mm_loadl_epi64((const __m128i*)i3);\
+  i3 += 8;\
+  const __m128i vi4 = _mm_loadl_epi64((const __m128i*)i4);\
+  i4 += 8;\
+  const __m128i vi5 = _mm_loadl_epi64((const __m128i*)i5);\
+  i5 += 8;\
+  const __m128i vi6 = _mm_loadl_epi64((const __m128i*)i6);\
+  i6 += 8;
+
+#define CACULATE_ACCUMULATE_VECTORS()                                                                \
+  __m128i vacc_lo = finish_one_pass ? _mm_load_si128((__m128i*)acc) : vbias;                         \
+  __m128i vacc_hi = finish_one_pass ? _mm_load_si128((__m128i*)acc + 1) : vbias;                     \
+  const __m128i vxi0 = _mm_unpacklo_epi8(vi0, vzero);                                                \
+  const __m128i vxi1 = _mm_unpacklo_epi8(vi1, vzero);                                                \
+  const __m128i vxi2 = _mm_unpacklo_epi8(vi2, vzero);                                                \
+  const __m128i vxi3 = _mm_unpacklo_epi8(vi3, vzero);                                                \
+  const __m128i vxi4 = _mm_unpacklo_epi8(vi4, vzero);                                                \
+  const __m128i vxi5 = _mm_unpacklo_epi8(vi5, vzero);                                                \
+  const __m128i vxi6 = _mm_unpacklo_epi8(vi6, vzero);                                                \
+  const __m128i vsum01 = _mm_add_epi16(vxi0, vxi1);                                                  \
+  const __m128i vsum23 = _mm_add_epi16(vxi2, vxi3);                                                  \
+  const __m128i vsum45 = _mm_add_epi16(vxi4, vxi5);                                                  \
+  const __m128i vsum016 = _mm_add_epi16(vsum01, vxi6);                                               \
+  const __m128i vsum2345 = _mm_add_epi16(vsum23, vsum45);                                            \
+  const __m128i vsum = _mm_add_epi16(vsum016, vsum2345);                                             \
+  vacc_lo = _mm_add_epi32(vacc_lo, _mm_unpacklo_epi16(vsum, vzero));                                 \
+  vacc_hi = _mm_add_epi32(vacc_hi, _mm_unpackhi_epi16(vsum, vzero))
+
+  const uint8_t* group_start = Input;
+  for (; ImageSize > 7; ImageSize -= 7) {
+    const uint8_t* i0 = group_start;
+    const uint8_t* i1 = group_start + Stride;
+    const uint8_t* i2 = group_start + Stride * 2;
+    const uint8_t* i3 = group_start + Stride * 3;
+    const uint8_t* i4 = group_start + Stride * 4;
+    const uint8_t* i5 = group_start + Stride * 5;
+    const uint8_t* i6 = group_start + Stride * 6;
+
+    size_t channels_remaining = Channels;
+    int32_t* acc = AccumulateBuffer;
+    for (; channels_remaining >= 8; channels_remaining -= 8) {
+      LOAD_FULL_CHANNELS();
+
+      CACULATE_ACCUMULATE_VECTORS();
+
+      _mm_store_si128((__m128i*)acc, vacc_lo);
+      _mm_store_si128((__m128i*)acc + 1, vacc_hi);
+      acc += 8;
+    }
+
+    if (channels_remaining > 0) {
+      uint8_t tail_buffer[8];
+      uint8_t* tb = &tail_buffer[0];
+      const uint8_t* LastInputOf8 = InputEnd - 8;
+      auto SafeTailBuffer = [tb, channels_remaining, LastInputOf8](const uint8_t* p) {
+        if (p >= LastInputOf8) {
+          std::copy_n(p, channels_remaining, tb);
+          return (const uint8_t*)tb;
+        }
+        return p;
+      };
+
+      const __m128i vi0 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i0));
+      const __m128i vi1 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i1));
+      const __m128i vi2 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i2));
+      const __m128i vi3 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i3));
+      const __m128i vi4 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i4));
+      const __m128i vi5 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i5));
+      const __m128i vi6 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i6));
+
+      CACULATE_ACCUMULATE_VECTORS();
+
+      _mm_store_si128((__m128i*)acc, vacc_lo);
+      _mm_store_si128((__m128i*)acc + 1, vacc_hi);
+    }
+
+    finish_one_pass = true;
+    group_start += 7 * Stride;
+  }
+
+  if (ImageSize > 0) {
+    const uint8_t* i0 = group_start;
+    const uint8_t* i1 = (ImageSize > 1) ? group_start + Stride : ZeroBuffer;
+    const uint8_t* i2 = (ImageSize > 2) ? group_start + Stride * 2 : ZeroBuffer;
+    const uint8_t* i3 = (ImageSize > 3) ? group_start + Stride * 3 : ZeroBuffer;
+    const uint8_t* i4 = (ImageSize > 4) ? group_start + Stride * 4 : ZeroBuffer;
+    const uint8_t* i5 = (ImageSize > 5) ? group_start + Stride * 5 : ZeroBuffer;
+    const uint8_t* i6 = (ImageSize > 6) ? group_start + Stride * 6 : ZeroBuffer;
+
+    int32_t* acc = AccumulateBuffer;
+    for (; Channels >= 8; Channels -= 8) {
+      LOAD_FULL_CHANNELS();
+
+      CACULATE_ACCUMULATE_VECTORS();
+      acc += 8;
+
+      vacc_lo = MlasRequantizeOutputVector(vacc_lo, vzero, vscale, vmin_value, vmax_value, vzero_point);
+      vacc_hi = MlasRequantizeOutputVector(vacc_hi, vzero, vscale, vmin_value, vmax_value, vzero_point);
+      __m128i vresult = _mm_packus_epi16(vacc_lo, vacc_hi);
       vresult = _mm_packus_epi16(vresult, vresult);
+      _mm_storel_epi64((__m128i*)Output, vresult);
+      Output += 8;
+    }
+
+    if (Channels > 0) {
+      uint8_t tail_buffer[8];
+      uint8_t* tb = &tail_buffer[0];
+      const uint8_t* LastInputOf8 = InputEnd - 8;
+      auto SafeTailBuffer = [tb, Channels, LastInputOf8, ImageSize](const uint8_t* p, size_t idx) {
+        if (idx < ImageSize && p >= LastInputOf8) {
+          std::copy_n(p, Channels, tb);
+          return (const uint8_t*)tb;
+        }
+        return p;
+      };
+
+      const __m128i vi0 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i0, 0));
+      const __m128i vi1 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i1, 1));
+      const __m128i vi2 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i2, 2));
+      const __m128i vi3 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i3, 3));
+      const __m128i vi4 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i4, 4));
+      const __m128i vi5 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i5, 5));
+      const __m128i vi6 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i6, 6));
+
+      CACULATE_ACCUMULATE_VECTORS();
+
+      vacc_lo = MlasRequantizeOutputVector(vacc_lo, vzero, vscale, vmin_value, vmax_value, vzero_point);
+      vacc_hi = MlasRequantizeOutputVector(vacc_hi, vzero, vscale, vmin_value, vmax_value, vzero_point);
+      __m128i vresult = _mm_packus_epi16(vacc_lo, vacc_hi);
       vresult = _mm_packus_epi16(vresult, vresult);
-      *((int32_t*)Output) = _mm_cvtsi128_si32(vresult);
-      sum_count = 0;
-      Output += 4;
+
+      if (Channels >= 4) {
+        *(int32_t*)Output = _mm_cvtsi128_si32(vresult);
+        vresult = _mm_shuffle_epi32(vresult, _MM_SHUFFLE(0, 3, 2, 1));
+        Output += 4;
+        Channels -= 4;
+      }
+      unsigned int b4 = _mm_cvtsi128_si32(vresult);
+      for (; Channels > 0; Channels--) {
+        *Output++ = static_cast<uint8_t>(b4);
+        b4 = b4 >> 8;
+      }
     }
   }
-  if (sum_count > 0) {
-    auto vsum = _mm_load_si128((__m128i*)sum_buffer);
-    auto vresult = MlasRequantizeOutputVector(vsum, vbias, vscale, vmin_value, vmax_value, vzero_point);
-    for (; sum_count > 0; --sum_count) {
+}
+
+static
+bool
+MLasCalculateParametersForGloabalAveragePool(
+    size_t ImageSize,
+    float ScaleInput,
+    int32_t ZeroPointInput,
+    float ScaleOutput,
+    int32_t& Bias,
+    int32_t& Multiplier,
+    int32_t& Shift,
+    uint64_t& Rounding
+    ){
+  Bias = - ZeroPointInput * gsl::narrow_cast<int32_t>(ImageSize);
+  float scale = ScaleInput / (ScaleOutput * (float)ImageSize);
+  if (scale < 0x1.0p-32f || scale >=  256.0f) return false;
+
+  const uint32_t scale_bits = MlasBitsOfFp32(scale);
+  const int32_t Multiplier = (int32_t)(scale_bits & 0x007FFFFF | 0x00800000);
+  if (Multiplier < 0x00800000 || Multiplier > 0x00FFFFFF) return false;
+
+  // Shift is in [16, 55] range.
+  Shift = 127 + 23 - (scale_bits >> 23);
+  if (Shift < 16 || Shift > 55) return false;
+  Rounding = uint64_t{1} << ((uint32_t)Shift - 1);
+
+  return true;
+}
+
+size_t
+MLASCALL
+MlasQLinearSafePaddingElementCount(
+    size_t ElementSize,
+    size_t ElementCount
+    ) {
+  assert(ElementSize == 1 || ElementSize == 2 || ElementSize == 4 || ElementSize == 8);
+  return (ElementSize * ElementCount + size_t{63}) & ~size_t{63};
+}
+
+void
+MLASCALL
+MlasNhwcQLinearGlobalAveragePool(
+    const uint8_t* Input,
+    float ScaleInput,
+    int32_t ZeroPointInput,
+    uint8_t* Output,
+    float ScaleOutput,
+    int32_t ZeroPointOutput,
+    int32_t* AccumulateBuffer,
+    const uint8_t* ZeroBuffer,
+    size_t ImageSize,
+    size_t Channels,
+    size_t Stride,
+    size_t Batch
+    ) {
+  if (Stride <= 1) {
+    MlasQLinearGlobalAveragePool(Input, ScaleInput, ZeroPointInput, Output, ScaleOutput, ZeroPointOutput, Channels, ImageSize);
+    return;
+  }
+
+  int32_t Bias;
+  int32_t Multiplier;
+  int32_t Shift;
+  uint64_t Rounding[2];
+
+  bool fast_ok = MLasCalculateParametersForGloabalAveragePool(
+      ImageSize, ScaleInput, ZeroPointInput, ScaleOutput,
+      Bias, Multiplier, Shift, Rounding[0]);
+  Rounding[1] = Rounding[0];
+  const uint8_t* InputEnd = Input + (Batch * ImageSize * Stride - Stride + Channels);
+
+  MlasNhwcReduceSumU8(Input, InputEnd, ZeroBuffer, AccumulateBuffer, ImageSize, Channels, Stride, Bias);
+
+  const auto vscale = MlasBroadcastFloat32x4(ScaleInput / ScaleOutput);
+  const auto vmin_value = MlasBroadcastFloat32x4(float(0 - ZeroPointOutput));
+  const auto vmax_value = MlasBroadcastFloat32x4(float(255 - ZeroPointOutput));
+  const auto vzero_point = MlasBroadcastInt32x4(ZeroPointOutput);
+
+  for (; Channels >=4; Channels-=4) {
+    AccumulateBuffer[0] /= (int32_t)ImageSize;
+    AccumulateBuffer[1] /= (int32_t)ImageSize;
+    AccumulateBuffer[2] /= (int32_t)ImageSize;
+    AccumulateBuffer[3] /= (int32_t)ImageSize;
+    auto vsum = _mm_load_si128((__m128i*)AccumulateBuffer);
+    auto vresult = MlasRequantizeOutputVector(vsum, _mm_setzero_si128(), vscale, vmin_value, vmax_value, vzero_point);
+    vresult = _mm_packus_epi16(vresult, vresult);
+    vresult = _mm_packus_epi16(vresult, vresult);
+    *((int32_t*)Output) = _mm_cvtsi128_si32(vresult);
+    Output += 4;
+    AccumulateBuffer += 4;
+  }
+  if (Channels > 0) {
+    AccumulateBuffer[0] /= (int32_t)ImageSize;
+    AccumulateBuffer[1] /= (int32_t)ImageSize;
+    AccumulateBuffer[2] /= (int32_t)ImageSize;
+    AccumulateBuffer[3] /= (int32_t)ImageSize;
+    auto vsum = _mm_load_si128((__m128i*)AccumulateBuffer);
+    auto vresult = MlasRequantizeOutputVector(vsum, _mm_setzero_si128(), vscale, vmin_value, vmax_value, vzero_point);
+    for (; Channels > 0; --Channels) {
       *Output++ = (uint8_t)_mm_cvtsi128_si32(vresult);
       vresult = _mm_shuffle_epi32(vresult, _MM_SHUFFLE(0, 3, 2, 1));
     }
   }
 }
-
+  
 #endif
 
 void

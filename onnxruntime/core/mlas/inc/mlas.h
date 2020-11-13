@@ -685,17 +685,24 @@ MlasQLinearGlobalAveragePool(
     size_t ImageSize
     );
 
-template<typename T>
+size_t
+MLASCALL
+MlasQLinearSafePaddingSize(
+    size_t ElementSize,
+    size_t ElementCount
+    );
+
 void
 MLASCALL
-MlasNhwcGlobalAveragePool(
+MlasNhwcQLinearGlobalAveragePool(
     const uint8_t* Input,
     float ScaleInput,
     int32_t ZeroPointInput,
     uint8_t* Output,
     float ScaleOutput,
     int32_t ZeroPointOutput,
-    size_t BatchSize,
+    int32_t* AccumulateBuffer,
+    uint8_t* ZeroBuffer,
     size_t ImageSize,
     size_t Channels
     );
