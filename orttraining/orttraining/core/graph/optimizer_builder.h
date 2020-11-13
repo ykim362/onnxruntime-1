@@ -61,7 +61,8 @@ class OptimizerBuilder {
    * @param opt_config The optimizer configuration.
    * @param[out] graph_defs The GraphDefs corresponding to the graph (possibly
    *             a subgraph) that the component is to be added to.
-   * @param[out] new_external_initializers Any initializers that should be
+   * @param[out] weight_to_opt_mapping Mapping between weight to corresponding optimizer states. Includes 
+   *             all initializers that should be
    *             placed in the parent graph, if there is one.
    *             Other initializers are treated as local to the current
    *             (sub)graph.
@@ -79,7 +80,7 @@ class OptimizerBuilder {
       const ArgDef* gradient_norm_finite_argdef,
       const std::vector<OptimizerNodeConfig>& opt_configs,
       GraphAugmenter::GraphDefs& graph_defs,
-      std::vector<ONNX_NAMESPACE::TensorProto>& new_external_initializers,
+      std::unordered_map<std::string, std::vector<ONNX_NAMESPACE::TensorProto>>& weight_to_opt_mapping,
       std::vector<ArgDef>& output_weight_argdefs,
       std::vector<ArgDef>& output_gradient_argdefs) const = 0;
 
@@ -100,7 +101,8 @@ class OptimizerBuilder {
    * @param opt_config The optimizer configuration.
    * @param[out] graph_defs The GraphDefs corresponding to the graph (possibly
    *             a subgraph) that the component is to be added to.
-   * @param[out] new_external_initializers Any initializers that should be
+   * @param[out] weight_to_opt_mapping Mapping between weight to optimizer. Includes 
+   *             all initializersthat should be
    *             placed in the parent graph, if there is one.
    *             Other initializers are treated as local to the current
    *             (sub)graph.
@@ -118,7 +120,7 @@ class OptimizerBuilder {
       const ArgDef* gradient_norm_finite_argdef,
       const std::vector<OptimizerNodeConfig>& opt_configs,
       GraphAugmenter::GraphDefs& graph_defs,
-      std::vector<ONNX_NAMESPACE::TensorProto>& new_external_initializers,
+      std::unordered_map<std::string, std::vector<ONNX_NAMESPACE::TensorProto>>& weight_to_opt_mapping,
       std::vector<ArgDef>& output_weight_argdefs,
       std::vector<ArgDef>& output_gradient_argdefs,
       const bool enable_grad_clipping) const = 0;

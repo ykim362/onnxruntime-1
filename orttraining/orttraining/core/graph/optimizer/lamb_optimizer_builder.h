@@ -27,7 +27,7 @@ class LambOptimizerBuilder final : public OptimizerBuilder {
       const ArgDef* gradient_norm_finite_argdef,
       const std::vector<OptimizerNodeConfig>& opt_configs,
       GraphAugmenter::GraphDefs& graph_defs,
-      std::vector<ONNX_NAMESPACE::TensorProto>& new_external_initializers,
+      std::unordered_map<std::string, std::vector<ONNX_NAMESPACE::TensorProto>>& new_external_initializers,
       std::vector<ArgDef>& output_weight_argdefs,
       std::vector<ArgDef>& output_gradient_argdefs) const override;
 
@@ -38,7 +38,7 @@ class LambOptimizerBuilder final : public OptimizerBuilder {
       const ArgDef* gradient_norm_finite_argdef,
       const std::vector<OptimizerNodeConfig>& opt_configs,
       GraphAugmenter::GraphDefs& graph_defs,
-      std::vector<ONNX_NAMESPACE::TensorProto>& new_external_initializers,
+      std::unordered_map<std::string, std::vector<ONNX_NAMESPACE::TensorProto>>& new_external_initializers,
       std::vector<ArgDef>& output_weight_argdefs,
       std::vector<ArgDef>& output_gradient_argdefs,
       const bool enable_grad_clipping) const override;

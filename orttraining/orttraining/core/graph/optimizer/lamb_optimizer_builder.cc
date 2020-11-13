@@ -17,13 +17,13 @@ Status LambOptimizerBuilder::Build(
     const ArgDef* gradient_norm_finite_argdef,
     const std::vector<OptimizerNodeConfig>& opt_configs,
     GraphAugmenter::GraphDefs& graph_defs,
-    std::vector<ONNX_NAMESPACE::TensorProto>& new_external_initializers,
+    std::unordered_map<std::string, std::vector<ONNX_NAMESPACE::TensorProto>>& weight_to_opt_mapping,
     std::vector<ArgDef>& output_weight_argdefs,
     std::vector<ArgDef>& output_gradient_argdefs) const {
   return Build(weight_argdefs, gradient_argdefs,
         gradient_norm_argdef, gradient_norm_finite_argdef,
         opt_configs, graph_defs,
-        new_external_initializers, output_weight_argdefs,
+        weight_to_opt_mapping, output_weight_argdefs,
         output_gradient_argdefs,
         // gradient clipping is enabled by default for Lamb.
         true /*enable_grad_clipping*/);
@@ -36,7 +36,7 @@ Status LambOptimizerBuilder::Build(
     const ArgDef* gradient_norm_finite_argdef,
     const std::vector<OptimizerNodeConfig>& opt_configs,
     GraphAugmenter::GraphDefs& graph_defs,
-    std::vector<TensorProto>& new_external_initializers,
+    std::unordered_map<std::string, std::vector<TensorProto>>& weight_to_opt_mapping,
     std::vector<ArgDef>& output_weight_argdefs,
     std::vector<ArgDef>& output_gradient_argdefs,
     bool enable_grad_clipping) const {
@@ -80,7 +80,7 @@ Status LambOptimizerBuilder::Build(
   // At the end of each Lamb call, the update count may be increased by one.
   const std::string step_tensor_name = "Step";  // per weight optimizer requires a per weight update count
   // Add step as an initializer.
-  new_external_initializers.emplace_back(CreateTensorProto<int64_t>(step_tensor_name, 1));
+  weight_to_opt_mapping["shared_optimizer_state"] = {CreateTensorProto<int64_t>(step_tensor_name, 1)};
   input_argdefs.emplace_back(ArgDef(step_tensor_name));
 
   // Add the first output, which is the updated step.
@@ -205,6 +205,7 @@ Status LambOptimizerBuilder::Build(
         output_argdefs.push_back(output_gradient_argdef);  // g_new
       }
 
+      weight_to_opt_mapping[weight_name] = {};
       // m1 & m2 & m1_new & m2_new
       const std::vector<std::string> moments_prefixes({"Moment_1_", "Moment_2_"});
       for (const auto& moment_prefix : moments_prefixes) {
@@ -221,7 +222,7 @@ Status LambOptimizerBuilder::Build(
         }
 
         // Store momentum tensor to initializer list.
-        new_external_initializers.emplace_back(std::move(moment_tensor_proto));
+        weight_to_opt_mapping[weight_name].emplace_back(std::move(moment_tensor_proto));
 
         // Add momentums to the input and output list of the Lamb node.
         input_argdefs.emplace_back(ArgDef(gradient_moment_name, moment_type_proto));
