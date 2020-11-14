@@ -25,8 +25,10 @@ Status ComputeAveragePool(
     const std::vector<int64_t>& kernel_dims,
     StorageOrder storage_order,
     concurrency::ThreadPool* tp) {
+  static constexpr int64_t kMiniChannelGroup = 64;
+
   int64_t kernel_size = std::accumulate(kernel_dims.begin(), kernel_dims.end(), 1LL, std::multiplies<int64_t>());
-  if (storage_order == StorageOrder::NCHW) {
+  if (storage_order == StorageOrder::NCHW || C == 1) {
     auto worker = [=](std::ptrdiff_t first, std::ptrdiff_t last) {
       const uint8_t* input = (const uint8_t*)(x + (first * kernel_size));
       uint8_t* output = (uint8_t*)(y + first);
@@ -35,16 +37,38 @@ Status ComputeAveragePool(
     concurrency::ThreadPool::TryParallelFor(tp, static_cast<std::ptrdiff_t>(N * C),
                                             {static_cast<double>(kernel_size), 1.0, static_cast<double>(kernel_size)}, worker);
   } else {
-    // auto worker = [x, y, C, kernel_size](std::ptrdiff_t first, std::ptrdiff_t last) {
-    //   for (; first < last; ++first) {
-    //     auto input_matrix = ConstEigenMatrixMapRowMajor<T>(x + (first * C * kernel_size), kernel_size, C);
-    //     auto output_matrix = EigenMatrixMapRowMajor<T>(y + (first * C), 1, C);
-    //     output_matrix = input_matrix.template cast<TAccumulate>().colwise().mean().template cast<T>();
-    //   }
-    // };
-    // concurrency::ThreadPool::TryParallelFor(tp, static_cast<std::ptrdiff_t>(N),
-    //                                         {static_cast<double>(kernel_size * C), 1.0 * C, static_cast<double>(kernel_size * C)},
-    //                                         worker);
+    if (N == 1) {
+      int64_t channel_padded = (C + kMiniChannelGroup - 1) & (~(kMiniChannelGroup - 1));
+      int64_t channel_groups = channel_padded / kMiniChannelGroup;
+      auto worker = [=](std::ptrdiff_t first, std::ptrdiff_t last) {
+        std::vector<int32_t> acc_buffer(MlasQLinearSafePaddingElementCount(sizeof(int32_t), C));
+        std::vector<uint8_t> zero_buffer(MlasQLinearSafePaddingElementCount(sizeof(uint8_t), kernel_size * C), 0);
+        const uint8_t* Input = x + first * kMiniChannelGroup;
+        uint8_t* Output = y + first * kMiniChannelGroup;
+        int64_t channel_count = (last == channel_groups) ? (C - first * kMiniChannelGroup) : ((last - first) * kMiniChannelGroup);
+        MlasNhwcQLinearGlobalAveragePool(
+            Input, x_scale, x_zero_point, Output, y_scale, y_zero_point,
+            N, kernel_size, C, channel_count, acc_buffer.data(), zero_buffer.data());
+      };
+      concurrency::ThreadPool::TryParallelFor(
+          tp, static_cast<std::ptrdiff_t>(channel_groups),
+          {1.0 * N * kernel_size * kMiniChannelGroup, 1.0 * N * kMiniChannelGroup, 8.0 * N * kernel_size * kMiniChannelGroup},
+          worker);
+    } else {
+      auto worker = [=](std::ptrdiff_t first, std::ptrdiff_t last) {
+        const uint8_t* Input = x + first * C * kernel_size;
+        uint8_t* Output = y + first * C;
+        std::vector<int32_t> acc_buffer(MlasQLinearSafePaddingElementCount(sizeof(int32_t), C));
+        std::vector<uint8_t> zero_buffer(MlasQLinearSafePaddingElementCount(sizeof(uint8_t), kernel_size * C), 0);
+        MlasNhwcQLinearGlobalAveragePool(
+            Input, x_scale, x_zero_point, Output, y_scale, y_zero_point,
+            last - first, kernel_size, C, C, acc_buffer.data(), zero_buffer.data());
+      };
+      concurrency::ThreadPool::TryParallelFor(
+          tp, static_cast<std::ptrdiff_t>(N),
+          {1.0 * kernel_size * C, 1.0 * C, 8.0 *kernel_size * C},
+          worker);
+    }
   }
   return Status::OK();
 }
@@ -72,7 +96,7 @@ Status QLinearGlobalAveragePool::Compute(OpKernelContext* context) const {
   auto first_dim = x_shape.begin() + (storage_order_ == StorageOrder::NCHW ? 2 : 1);
   std::vector<int64_t> kernel_dims{first_dim, first_dim + (x_shape.size() - 2)};
   int64_t N = x_shape[0];
-  int64_t C = storage_order_ == StorageOrder::NCHW ? x_shape[1] : x_shape.back();
+  int64_t C = (storage_order_ == StorageOrder::NCHW ? x_shape[1] : x_shape.back());
 
   std::vector<int64_t> output_dims{N};
   std::vector<int64_t> one_dims(x_shape.size() - 2, 1LL);
@@ -90,7 +114,6 @@ Status QLinearGlobalAveragePool::Compute(OpKernelContext* context) const {
   auto dtype = X.GetElementType();
   switch (dtype) {
     case ONNX_NAMESPACE::TensorProto_DataType_UINT8:
-      std::cout << "====GlobalAveragePool: NxCxImageSize=" << N << "x" << C << "x" << kernel_dims << std::endl;
       return ComputeAveragePool(X.Data<uint8_t>(), x_scale, *(tensor_x_zero_point->Data<uint8_t>()),
                                 Y.MutableData<uint8_t>(), y_scale, *(tensor_y_zero_point->Data<uint8_t>()),
                                 N, C, kernel_dims, storage_order_, tp);

@@ -2069,7 +2069,7 @@ equal to the spatial dimension of input tensor. Input is of type uint8_t or int8
         }
 
         if (!nchw) {
-          *output_shape->add_dim() = input_shape.dim(1);
+          *output_shape->add_dim() = input_shape.dim(input_shape.dim_size() - 1);
         }
       });
 

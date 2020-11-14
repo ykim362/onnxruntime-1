@@ -672,6 +672,13 @@ MlasFindMinMaxElement(
     size_t N
     );
 
+size_t
+MLASCALL
+MlasQLinearSafePaddingElementCount(
+    size_t ElementSize,
+    size_t ElementCount
+    );
+
 void
 MLASCALL
 MlasQLinearGlobalAveragePool(
@@ -685,13 +692,6 @@ MlasQLinearGlobalAveragePool(
     size_t ImageSize
     );
 
-size_t
-MLASCALL
-MlasQLinearSafePaddingSize(
-    size_t ElementSize,
-    size_t ElementCount
-    );
-
 void
 MLASCALL
 MlasNhwcQLinearGlobalAveragePool(
@@ -701,10 +701,12 @@ MlasNhwcQLinearGlobalAveragePool(
     uint8_t* Output,
     float ScaleOutput,
     int32_t ZeroPointOutput,
-    int32_t* AccumulateBuffer,
-    uint8_t* ZeroBuffer,
+    size_t Batch,
     size_t ImageSize,
-    size_t Channels
+    size_t Stride,
+    size_t Channels,
+    int32_t* AccumulateBuffer,
+    const uint8_t* ZeroBuffer
     );
 
 //
