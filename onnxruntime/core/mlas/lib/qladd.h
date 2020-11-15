@@ -17,16 +17,7 @@ Abstract:
 
 #pragma once
 
-#include "mlasi.h"
-
-bool
-MlasCalcQLinearAddParameters(
-    float ScaleRatio_AC,
-    float ScaleRatio_BC,
-    int32_t& Shift,
-    int32_t& MultiplierA,
-    int32_t& MultiplierB
-    );
+#include "quantize.h"
 
 #if defined(MLAS_NEON_INTRINSICS)
 

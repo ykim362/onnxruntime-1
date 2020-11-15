@@ -135,52 +135,6 @@ Abstract:
 #define MLAS_DGEMM_STRIDEN_THREAD_ALIGN             8
 #define MLAS_QGEMM_STRIDEN_THREAD_ALIGN             16
 
-union MLAS_FLOAT32BITS {
-    uint32_t u32;
-    float fp32;
-};
-
-MLAS_FORCEINLINE
-static
-uint32_t
-MlasBitsOfFp32(
-    float f
-    ) {
-    MLAS_FLOAT32BITS uf;
-    uf.fp32 = f;
-    return uf.u32;
-}
-
-MLAS_FORCEINLINE
-static
-float
-MlasFp32FromBits(
-    uint32_t u
-    ) {
-    MLAS_FLOAT32BITS uf = {u};
-    return uf.fp32;
-}
-
-MLAS_FORCEINLINE
-static
-void
-MlasCopyTailBytes(
-    uint8_t* target,
-    const uint8_t* src,
-    size_t N
-    ) {
-    while (N >= sizeof(uint32_t)) {
-        *(uint32_t*)(target) = *(uint32_t*)(src);
-        N -= sizeof(uint32_t);
-        target += sizeof(uint32_t);
-        src += sizeof(uint32_t);
-    }
-    while (N > 0) {
-        *target++ = *src++;
-        --N;
-    }
-}
-
 //
 // Define the prototypes of the platform optimized routines.
 //

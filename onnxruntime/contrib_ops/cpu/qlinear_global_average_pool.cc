@@ -28,7 +28,7 @@ Status ComputeAveragePool(
   static constexpr int64_t kMiniChannelGroup = 64;
 
   int64_t kernel_size = std::accumulate(kernel_dims.begin(), kernel_dims.end(), 1LL, std::multiplies<int64_t>());
-  if (storage_order == StorageOrder::NCHW || C == 1) {
+  if (storage_order == StorageOrder::NHWC || C == 1) {
     auto worker = [=](std::ptrdiff_t first, std::ptrdiff_t last) {
       const uint8_t* input = (const uint8_t*)(x + (first * kernel_size));
       uint8_t* output = (uint8_t*)(y + first);
@@ -42,7 +42,7 @@ Status ComputeAveragePool(
       int64_t channel_groups = channel_padded / kMiniChannelGroup;
       auto worker = [=](std::ptrdiff_t first, std::ptrdiff_t last) {
         std::vector<int32_t> acc_buffer(MlasQLinearSafePaddingElementCount(sizeof(int32_t), C));
-        std::vector<uint8_t> zero_buffer(MlasQLinearSafePaddingElementCount(sizeof(uint8_t), kernel_size * C), 0);
+        std::vector<uint8_t> zero_buffer(MlasQLinearSafePaddingElementCount(sizeof(uint8_t), C), 0);
         const uint8_t* Input = x + first * kMiniChannelGroup;
         uint8_t* Output = y + first * kMiniChannelGroup;
         int64_t channel_count = (last == channel_groups) ? (C - first * kMiniChannelGroup) : ((last - first) * kMiniChannelGroup);
@@ -59,7 +59,7 @@ Status ComputeAveragePool(
         const uint8_t* Input = x + first * C * kernel_size;
         uint8_t* Output = y + first * C;
         std::vector<int32_t> acc_buffer(MlasQLinearSafePaddingElementCount(sizeof(int32_t), C));
-        std::vector<uint8_t> zero_buffer(MlasQLinearSafePaddingElementCount(sizeof(uint8_t), kernel_size * C), 0);
+        std::vector<uint8_t> zero_buffer(MlasQLinearSafePaddingElementCount(sizeof(uint8_t), C), 0);
         MlasNhwcQLinearGlobalAveragePool(
             Input, x_scale, x_zero_point, Output, y_scale, y_zero_point,
             last - first, kernel_size, C, C, acc_buffer.data(), zero_buffer.data());
