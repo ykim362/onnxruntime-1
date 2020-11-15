@@ -28,14 +28,14 @@ Status ComputeAveragePool(
   static constexpr int64_t kMiniChannelGroup = 64;
 
   int64_t kernel_size = std::accumulate(kernel_dims.begin(), kernel_dims.end(), 1LL, std::multiplies<int64_t>());
-  if (storage_order == StorageOrder::NHWC || C == 1) {
+  if (storage_order == StorageOrder::NCHW || C == 1) {
     auto worker = [=](std::ptrdiff_t first, std::ptrdiff_t last) {
       const uint8_t* input = (const uint8_t*)(x + (first * kernel_size));
       uint8_t* output = (uint8_t*)(y + first);
       MlasQLinearGlobalAveragePool(input, x_scale, x_zero_point, output, y_scale, y_zero_point, last - first, kernel_size);
     };
-    concurrency::ThreadPool::TryParallelFor(tp, static_cast<std::ptrdiff_t>(N * C),
-                                            {static_cast<double>(kernel_size), 1.0, static_cast<double>(kernel_size)}, worker);
+    concurrency::ThreadPool::TryParallelFor(
+        tp, static_cast<std::ptrdiff_t>(N * C), {1.0 * kernel_size, 1.0, 8.0 * kernel_size}, worker);
   } else {
     if (N == 1) {
       int64_t channel_padded = (C + kMiniChannelGroup - 1) & (~(kMiniChannelGroup - 1));

@@ -165,13 +165,12 @@ MlasQLinearGlobalAveragePool(
     }
 }
 
-static
-void
+static void
 MLASCALL
 MlasNhwcQLinearGlobalAveragePoolSingleBatch(
-    const uint8_t* Input,
+    const uint8_t* i0,
     uint8_t* Output,
-    const uint8_t* InputEnd,
+    const uint8_t* LastOf8,
     size_t ImageSize,
     size_t Channels,
     size_t Stride,
@@ -181,27 +180,27 @@ MlasNhwcQLinearGlobalAveragePoolSingleBatch(
     const __m128 vmax_value,
     const __m128i vzero_point,
     int32_t* AccumulateBuffer,
-    const uint8_t* ZeroBuffer
-    )
+    const uint8_t* ZeroBuffer)
 {
-    uint8_t tail_buffer[8];
+    uint8_t tail[8];
     bool finish_one_pass = false;
     const __m128i vzero = _mm_setzero_si128();
+    size_t step_next_group = 7 * Stride - (Channels & ~(size_t){7});
 
-#define LOAD_FULL_CHANNELS() \
+#define LOAD_FULL_CHANNELS()                                 \
     const __m128i vi0 = _mm_loadl_epi64((const __m128i*)i0); \
-    i0 += 8; \
-    const __m128i vi1 = _mm_loadl_epi64((const __m128i*)i1);\
-    i1 += 8;\
-    const __m128i vi2 = _mm_loadl_epi64((const __m128i*)i2);\
-    i2 += 8;\
-    const __m128i vi3 = _mm_loadl_epi64((const __m128i*)i3);\
-    i3 += 8;\
-    const __m128i vi4 = _mm_loadl_epi64((const __m128i*)i4);\
-    i4 += 8;\
-    const __m128i vi5 = _mm_loadl_epi64((const __m128i*)i5);\
-    i5 += 8;\
-    const __m128i vi6 = _mm_loadl_epi64((const __m128i*)i6);\
+    i0 += 8;                                                 \
+    const __m128i vi1 = _mm_loadl_epi64((const __m128i*)i1); \
+    i1 += 8;                                                 \
+    const __m128i vi2 = _mm_loadl_epi64((const __m128i*)i2); \
+    i2 += 8;                                                 \
+    const __m128i vi3 = _mm_loadl_epi64((const __m128i*)i3); \
+    i3 += 8;                                                 \
+    const __m128i vi4 = _mm_loadl_epi64((const __m128i*)i4); \
+    i4 += 8;                                                 \
+    const __m128i vi5 = _mm_loadl_epi64((const __m128i*)i5); \
+    i5 += 8;                                                 \
+    const __m128i vi6 = _mm_loadl_epi64((const __m128i*)i6); \
     i6 += 8;
 
 #define CACULATE_ACCUMULATE_VECTORS()                                                                  \
@@ -223,19 +222,17 @@ MlasNhwcQLinearGlobalAveragePoolSingleBatch(
     vacc_lo = _mm_add_epi32(vacc_lo, _mm_unpacklo_epi16(vsum, vzero));                                 \
     vacc_hi = _mm_add_epi32(vacc_hi, _mm_unpackhi_epi16(vsum, vzero))
 
-    const uint8_t* group_start = Input;
     for (; ImageSize > 7; ImageSize -= 7) {
-        const uint8_t* i0 = group_start;
-        const uint8_t* i1 = group_start + Stride;
-        const uint8_t* i2 = group_start + Stride * 2;
-        const uint8_t* i3 = group_start + Stride * 3;
-        const uint8_t* i4 = group_start + Stride * 4;
-        const uint8_t* i5 = group_start + Stride * 5;
-        const uint8_t* i6 = group_start + Stride * 6;
+        const uint8_t* i1 = i0 + Stride;
+        const uint8_t* i4 = i0 + Stride * 4;
+        const uint8_t* i2 = i1 + Stride;
+        const uint8_t* i5 = i4 + Stride;
+        const uint8_t* i3 = i2 + Stride;
+        const uint8_t* i6 = i5 + Stride;
 
-        size_t channels_remaining = Channels;
+        size_t c = Channels;
         int32_t* acc = AccumulateBuffer;
-        for (; channels_remaining >= 8; channels_remaining -= 8) {
+        for (; c >= 8; c -= 8) {
             LOAD_FULL_CHANNELS();
             CACULATE_ACCUMULATE_VECTORS();
             _mm_store_si128((__m128i*)acc, vacc_lo);
@@ -243,24 +240,14 @@ MlasNhwcQLinearGlobalAveragePoolSingleBatch(
             acc += 8;
         }
 
-        if (channels_remaining > 0) {
-            uint8_t* tb = &tail_buffer[0];
-            const uint8_t* LastInputOf8 = InputEnd - 8;
-            auto SafeTailBuffer = [tb, channels_remaining, LastInputOf8](const uint8_t* p) {
-                if (p >= LastInputOf8) {
-                    std::copy_n(p, channels_remaining, tb);
-                    return (const uint8_t*)tb;
-                }
-                return p;
-            };
-
-            const __m128i vi0 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i0));
-            const __m128i vi1 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i1));
-            const __m128i vi2 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i2));
-            const __m128i vi3 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i3));
-            const __m128i vi4 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i4));
-            const __m128i vi5 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i5));
-            const __m128i vi6 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i6));
+        if (c > 0) {
+            const __m128i vi0 = _mm_loadl_epi64((const __m128i*)(i0 >= LastOf8 ? MlasCopyTailBytes(tail, i0, c) : i0));
+            const __m128i vi1 = _mm_loadl_epi64((const __m128i*)(i1 >= LastOf8 ? MlasCopyTailBytes(tail, i1, c) : i1));
+            const __m128i vi2 = _mm_loadl_epi64((const __m128i*)(i2 >= LastOf8 ? MlasCopyTailBytes(tail, i2, c) : i2));
+            const __m128i vi3 = _mm_loadl_epi64((const __m128i*)(i3 >= LastOf8 ? MlasCopyTailBytes(tail, i3, c) : i3));
+            const __m128i vi4 = _mm_loadl_epi64((const __m128i*)(i4 >= LastOf8 ? MlasCopyTailBytes(tail, i4, c) : i4));
+            const __m128i vi5 = _mm_loadl_epi64((const __m128i*)(i5 >= LastOf8 ? MlasCopyTailBytes(tail, i5, c) : i5));
+            const __m128i vi6 = _mm_loadl_epi64((const __m128i*)(i6 >= LastOf8 ? MlasCopyTailBytes(tail, i6, c) : i6));
 
             CACULATE_ACCUMULATE_VECTORS();
 
@@ -269,17 +256,16 @@ MlasNhwcQLinearGlobalAveragePoolSingleBatch(
         }
 
         finish_one_pass = true;
-        group_start += 7 * Stride;
+        i0 += step_next_group;
     }
 
     if (ImageSize > 0) {
-        const uint8_t* i0 = group_start;
-        const uint8_t* i1 = (ImageSize > 1 ? group_start + Stride : ZeroBuffer);
-        const uint8_t* i2 = (ImageSize > 2 ? group_start + Stride * 2 : ZeroBuffer);
-        const uint8_t* i3 = (ImageSize > 3 ? group_start + Stride * 3 : ZeroBuffer);
-        const uint8_t* i4 = (ImageSize > 4 ? group_start + Stride * 4 : ZeroBuffer);
-        const uint8_t* i5 = (ImageSize > 5 ? group_start + Stride * 5 : ZeroBuffer);
-        const uint8_t* i6 = (ImageSize > 6 ? group_start + Stride * 6 : ZeroBuffer);
+        const uint8_t* i1 = (ImageSize > 1 ? i0 + Stride : ZeroBuffer);
+        const uint8_t* i4 = (ImageSize > 4 ? i0 + Stride * 4 : ZeroBuffer);
+        const uint8_t* i2 = (ImageSize > 2 ? i1 + Stride : ZeroBuffer);
+        const uint8_t* i5 = (ImageSize > 5 ? i4 + Stride : ZeroBuffer);
+        const uint8_t* i3 = (ImageSize > 3 ? i2 + Stride : ZeroBuffer);
+        const uint8_t* i6 = (ImageSize > 6 ? i5 + Stride : ZeroBuffer);
 
         int32_t* acc = AccumulateBuffer;
         for (; Channels >= 8; Channels -= 8) {
@@ -296,23 +282,13 @@ MlasNhwcQLinearGlobalAveragePoolSingleBatch(
         }
 
         if (Channels > 0) {
-            uint8_t* tb = &tail_buffer[0];
-            const uint8_t* LastInputOf8 = InputEnd - 8;
-            auto SafeTailBuffer = [tb, Channels, LastInputOf8, ImageSize](const uint8_t* p, size_t idx) {
-                if (idx < ImageSize && p >= LastInputOf8) {
-                    std::copy_n(p, Channels, tb);
-                    return (const uint8_t*)tb;
-                }
-                return p;
-            };
-
-            const __m128i vi0 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i0, 0));
-            const __m128i vi1 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i1, 1));
-            const __m128i vi2 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i2, 2));
-            const __m128i vi3 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i3, 3));
-            const __m128i vi4 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i4, 4));
-            const __m128i vi5 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i5, 5));
-            const __m128i vi6 = _mm_loadl_epi64((const __m128i*)SafeTailBuffer(i6, 6));
+            const __m128i vi0 = _mm_loadl_epi64((const __m128i*)(i0 >= LastOf8 ? MlasCopyTailBytes(tail, i0, Channels) : i0));
+            const __m128i vi1 = _mm_loadl_epi64((const __m128i*)(1 < ImageSize && i1 >= LastOf8 ? MlasCopyTailBytes(tail, i1, Channels) : i1));
+            const __m128i vi2 = _mm_loadl_epi64((const __m128i*)(2 < ImageSize && i2 >= LastOf8 ? MlasCopyTailBytes(tail, i2, Channels) : i2));
+            const __m128i vi3 = _mm_loadl_epi64((const __m128i*)(3 < ImageSize && i3 >= LastOf8 ? MlasCopyTailBytes(tail, i3, Channels) : i3));
+            const __m128i vi4 = _mm_loadl_epi64((const __m128i*)(4 < ImageSize && i4 >= LastOf8 ? MlasCopyTailBytes(tail, i4, Channels) : i4));
+            const __m128i vi5 = _mm_loadl_epi64((const __m128i*)(5 < ImageSize && i5 >= LastOf8 ? MlasCopyTailBytes(tail, i5, Channels) : i5));
+            const __m128i vi6 = _mm_loadl_epi64((const __m128i*)(6 < ImageSize && i6 >= LastOf8 ? MlasCopyTailBytes(tail, i6, Channels) : i6));
 
             CACULATE_ACCUMULATE_VECTORS();
 
@@ -355,11 +331,12 @@ MlasNhwcQLinearGlobalAveragePool(
 {
     if (Stride == 1) {
         assert(Channels == Stride);
-        MlasQLinearGlobalAveragePool(Input, ScaleInput, ZeroPointInput, Output, ScaleOutput, ZeroPointOutput, Batch, ImageSize);
+        MlasQLinearGlobalAveragePool(Input, ScaleInput, ZeroPointInput, 
+                                    Output, ScaleOutput, ZeroPointOutput, Batch, ImageSize);
         return;
     }
 
-    const uint8_t* InputEnd = Input + (Batch * ImageSize * Stride - Stride + Channels);
+    const uint8_t* InputEnd = Input + (Batch * ImageSize * Stride - Stride + Channels) - 8;
     int32_t Bias = -ZeroPointInput * gsl::narrow_cast<int32_t>(ImageSize);
     const auto vbias = MlasBroadcastInt32x4(Bias);
     float scale = ScaleInput / gsl::narrow_cast<float>(ImageSize) / ScaleOutput;
@@ -378,7 +355,7 @@ MlasNhwcQLinearGlobalAveragePool(
     }
 }
 
-#elif
+#else
 
 // Pure C++ Implementation
 
@@ -396,13 +373,13 @@ MlasQLinearGlobalAveragePool(
     )
 {
     int32_t bias = -ZeroPointInput * gsl::narrow_cast<int32_t>(ImageSize);
-    float scale = ScaleInput / (scaleOutput * static_cast<float>(ImageSize));
+    float scale = ScaleInput / (ScaleOutput * static_cast<float>(ImageSize));
     for (; Channels > 0; Channels--) {
         int32_t acc = bias;
         for (size_t i = 0; i < ImageSize; ++i) {
             acc += static_cast<int>(*Input++);
         }
-        int32_t v = static_cast<int>(std::nearbyinf(acc * scale)) + ZeroPointOutput;
+        int32_t v = static_cast<int>(std::nearbyintf(acc * scale)) + ZeroPointOutput;
         *Output++ = std::max(std::min(255, v), 0);
     }
 }
@@ -421,11 +398,11 @@ MlasNhwcQLinearGlobalAveragePool(
     size_t Stride,
     size_t Channels,
     int32_t* AccumulateBuffer,
-    const uint8_t* ZeroBuffer
+    const uint8_t* /* ZeroBuffer */
     )
 {
     int32_t bias = -ZeroPointInput * gsl::narrow_cast<int32_t>(ImageSize);
-    float scale = ScaleInput / (scaleOutput * static_cast<float>(ImageSize));
+    float scale = ScaleInput / (ScaleOutput * static_cast<float>(ImageSize));
     for (; Batch > 0; Batch--) {
         const uint8_t* batch_input = Input;
         uint8_t* batch_output = Output;
@@ -439,7 +416,7 @@ MlasNhwcQLinearGlobalAveragePool(
             batch_input += Stride;
         }
         for (size_t c = 0; c < Channels; ++c) {
-            int32_t v = static_cast<int>(std::nearbyinf(AccumulateBuffer[c] * scale)) + ZeroPointOutput;
+            int32_t v = static_cast<int>(std::nearbyintf(AccumulateBuffer[c] * scale)) + ZeroPointOutput;
             *batch_output++ = std::max(std::min(255, v), 0);
         }
     }

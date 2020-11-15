@@ -67,6 +67,14 @@ void RunQLinearGlobalAveragePoolU8(
   test.Run();
 }
 
+TEST(QLinearGlobalAveragePool, Nchw_1x1x32x32) {
+  RunQLinearGlobalAveragePoolU8(true, 1, 1, 32, 32, 128, 1.0, 64, 2.0);
+}
+
+TEST(QLinearGlobalAveragePool, Nhwc_1x32x32x1) {
+  RunQLinearGlobalAveragePoolU8(false, 1, 1, 32, 32, 128, 1.0, 64, 2.0);
+}
+
 TEST(QLinearGlobalAveragePool, Nchw_1x256x8x8) {
   RunQLinearGlobalAveragePoolU8(true, 1, 256, 8, 8, 128, 1.0, 64, 2.0);
 }

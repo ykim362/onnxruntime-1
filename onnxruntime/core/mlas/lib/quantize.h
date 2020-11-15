@@ -53,14 +53,15 @@ MlasCopyTailBytes(
     size_t N
     )
 {
+    uint8_t* dst = target;
     while (N >= sizeof(uint32_t)) {
-        *(uint32_t*)(target) = *(uint32_t*)(src);
+        *(uint32_t*)dst = *(uint32_t*)src;
         N -= sizeof(uint32_t);
-        target += sizeof(uint32_t);
+        dst += sizeof(uint32_t);
         src += sizeof(uint32_t);
     }
     while (N > 0) {
-        *target++ = *src++;
+        *dst++ = *src++;
         --N;
     }
     return target;
