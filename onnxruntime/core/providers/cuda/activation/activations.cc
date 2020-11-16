@@ -2,9 +2,6 @@
 // Licensed under the MIT License.
 
 #include "activations.h"
-#include "core/profile/context.h"
-#include <vector>
-#include <iostream>
 
 namespace onnxruntime {
 namespace cuda {
@@ -40,20 +37,11 @@ namespace cuda {
     UnaryElementwisePreparation p;                                                                         \
     ORT_RETURN_IF_ERROR(UnaryElementwise::Prepare(context, &p));                                           \
     Ctx##x func_ctx = MakeFuncCtx();                                                                       \
-    std::vector<T> in_buffer(p.output_tensor->Shape().Size());\
-    cudaMemcpy(in_buffer.data(), p.input_tensor->template Data<T>(), p.output_tensor->Shape().Size() * sizeof(T), cudaMemcpyDeviceToHost);\
     Impl_##x<typename ToCudaType<T>::MappedType>(                                                          \
         reinterpret_cast<const typename ToCudaType<T>::MappedType*>(p.input_tensor->template Data<T>()),   \
         reinterpret_cast<typename ToCudaType<T>::MappedType*>(p.output_tensor->template MutableData<T>()), \
         &func_ctx, p.output_tensor->Shape().Size());                                                       \
                                                                                                            \
-    std::vector<T> out_buffer(p.output_tensor->Shape().Size());\
-    cudaMemcpy(out_buffer.data(), p.output_tensor->template MutableData<T>(), p.output_tensor->Shape().Size() * sizeof(T), cudaMemcpyDeviceToHost);\
-    auto& profile_context = profile::Context::GetInstance();\
-    const auto tag = profile_context.GetThreadTagOrDefault(std::this_thread::get_id());\
-    for (int i = 0; i < p.output_tensor->Shape().Size(); ++i) {\
-      std::cout << "[unary..] batch " << tag << ", in[" << i << "]=" << float(in_buffer[i]) << ", out[" << i << "]=" << float(out_buffer[i]) << std::endl;\
-    }\
     return Status::OK();                                                                                   \
   }
 

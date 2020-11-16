@@ -31,7 +31,7 @@ __global__ void _AdamOptimizer_mode0(
     T_MIXED_PRECISION_FP* mixed_precision_weights_out,
     CUDA_LONG N) {
   CALCULATE_ELEMENTWISE_INDEX_OR_EXIT(id, N);
-  const T4 actual_scale = T4(1.0f);//_ComputeGradScale<T3, T_GRAD_NORM, T4>(loss_scale, grad_norm);
+  const T4 actual_scale = _ComputeGradScale<T3, T_GRAD_NORM, T4>(loss_scale, grad_norm);
 
   // Gradient scaling/clipping.
   const T4 g = T4(grads[id]) / actual_scale;
