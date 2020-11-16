@@ -12,7 +12,6 @@
 #include "orttraining/core/graph/optimizer_config.h"
 #include "orttraining/core/graph/gradient_config.h"
 #include "orttraining/models/runner/pipeline.h"
-//#include "core/session/tensorhelper.h"
 
 namespace onnxruntime {
 namespace training {
@@ -23,13 +22,10 @@ class TrainingSession : public InferenceSession {
                              std::vector<std::pair<size_t /*InputIndex*/, float /*value*/>>>
       ImmutableWeights;
 
-  ~TrainingSession();
   TrainingSession(const SessionOptions& session_options, const Environment& env)
-      : InferenceSession(session_options, env) {  std::cout << "[training_session.h] Call ctor TrainingSession" << std::endl; }
+      : InferenceSession(session_options, env) {}
+  ~TrainingSession();
 
-  // define friend function
-  //friend OrtValue SliceTensor(const OrtValue& orig_value, const size_t slice_id,
-  //                    const size_t slice_axis, const size_t num_slices, const TrainingSession& session_state);
   /**
    * The training configuration options.
    */
@@ -342,6 +338,7 @@ class TrainingSession : public InferenceSession {
   using InferenceSession::Run;  // For overload resolution.
   common::Status Run(const RunOptions& run_options, IOBinding& io_binding) override;
 
+  common::Status RunWithoutPipeline(const RunOptions& run_options, IOBinding& io_binding);
   common::Status RunWithPipeline(const RunOptions& run_options, IOBinding& io_binding);
 
  private:

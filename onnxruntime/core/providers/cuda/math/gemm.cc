@@ -5,6 +5,7 @@
 #include "core/providers/cpu/math/gemm_helper.h"
 #include "core/providers/cuda/cuda_common.h"
 #include "core/providers/cuda/shared_inc/fpgeneric.h"
+#include "core/profile/context.h"
 
 namespace onnxruntime {
 namespace cuda {
@@ -72,6 +73,28 @@ Status Gemm<T>::ComputeInternal(OpKernelContext* ctx) const {
   int K = gsl::narrow_cast<int>(helper.K());
   auto* Y = ctx->Output(0, {M, N});
   CudaT* out_data = reinterpret_cast<CudaT*>(Y->template MutableData<T>());
+
+  //auto& profile_context = profile::Context::GetInstance();
+  //const auto tag = profile_context.GetThreadTagOrDefault(std::this_thread::get_id());
+
+  //auto input_defs = Node().InputDefs();
+  //std::vector<CudaT> x_buf(X->Shape().Size());
+  //cudaMemcpy(x_buf.data(), X->template Data<T>(), X->Shape().Size() * sizeof(CudaT), cudaMemcpyDeviceToHost);
+  //for (int i = 0; i < X->Shape().Size(); ++i) {
+  //    std::cout << "[gemm.cc] batch " << tag << ", " << input_defs[0]->Name() << "[" << i << "]=" << x_buf[i] << std::endl;
+  //}
+
+  //std::vector<CudaT> w_buf(W->Shape().Size());
+  //cudaMemcpy(w_buf.data(), W->template Data<T>(), W->Shape().Size() * sizeof(CudaT), cudaMemcpyDeviceToHost);
+  //for (int i = 0; i < W->Shape().Size(); ++i) {
+  //    std::cout << "[gemm.cc] batch " << tag << ", " << input_defs[1]->Name() << "[" << i << "]=" << w_buf[i] << std::endl;
+  //}
+
+  //std::vector<CudaT> b_buf(B->Shape().Size());
+  //cudaMemcpy(b_buf.data(), B->template Data<T>(), B->Shape().Size() * sizeof(CudaT), cudaMemcpyDeviceToHost);
+  //for (int i = 0; i < B->Shape().Size(); ++i) {
+  //    std::cout << "[gemm.cc] batch " << tag << ", " << input_defs[2]->Name() << "[" << i << "]=" << b_buf[i] << std::endl;
+  //}
 
   CudaT one = ToCudaType<T>::FromFloat(1.0f);
   CudaT zero = ToCudaType<T>::FromFloat(0.0f);

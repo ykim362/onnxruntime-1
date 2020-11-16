@@ -1037,9 +1037,14 @@ bool TrainingSession::IsGraphOutputFp32Node(const std::string& output_name) cons
 }
 
 common::Status TrainingSession::Run(const RunOptions& run_options, IOBinding& io_binding) {
-  if (true) {
+  if (pipeline_context_.num_pipeline_stages > 1) {
     return RunWithPipeline(run_options, io_binding);
+  } else {
+    return RunWithoutPipeline(run_options, io_binding);
   }
+}
+
+common::Status TrainingSession::RunWithoutPipeline(const RunOptions& run_options, IOBinding& io_binding) {
   // Override initializers in eval mode.
   if (!run_options.training_mode) {
     std::vector<std::pair<std::string, OrtValue>> new_feeds;
@@ -1222,55 +1227,45 @@ common::Status TrainingSession::RunWithPipeline(const RunOptions& run_options, I
     // Add proper events to the binding.
     CreatePipelineEvents(training_mode, i, stage_id, *sub_io_binding.get());
 
-    if (pipeline_context_.num_pipeline_stages > 1) {
-      // Cyclically pick up a worker ID.
-      const size_t worker_id = i % pipeline_context_.num_pipeline_stages;
-      pipeline_worker_pool_.Join(worker_id);
-      pipeline_worker_pool_.workers[worker_id] = std::thread([&](const size_t step){
-        auto& profile_context = profile::Context::GetInstance();
-        profile_context.SetThreadTag(
-            std::this_thread::get_id(), std::to_string(step));
+    // Cyclically pick up a worker ID.
+    const size_t worker_id = i % pipeline_context_.num_pipeline_stages;
+    pipeline_worker_pool_.Join(worker_id);
+    pipeline_worker_pool_.workers[worker_id] = std::thread([&](const size_t step){
+  #ifdef ENABLE_NVTX_PROFILE
+        // Store the tag for the thread which runs session_.Run(...).
+        // It will be used to name range in Nvidia's visual profiler.
+      auto& profile_context = profile::Context::GetInstance();
+      profile_context.SetThreadTag(
+          std::this_thread::get_id(), std::to_string(step));
+  #endif
 
-        if (step == num_steps - 1) {
-          RunOptions run_options_ = run_options;
-          run_options_.only_execute_path_to_fetches = false;
-          auto status = InferenceSession::Run(
-                run_options_,
-                sub_io_bindings[step]->GetInputNames(),
-                sub_io_bindings[step]->GetInputs(),
-                sub_io_bindings[step]->GetOutputNames(),
-                &sub_io_bindings[step]->GetOutputs());
-          ORT_THROW_IF_ERROR(status);
-        } else {
-          RunOptions run_options_ = run_options;
-          run_options_.only_execute_path_to_fetches = true;
-          std::vector<OrtValue> fetches;
-          auto status = InferenceSession::Run(
-                run_options_,
-                sub_io_bindings[step]->GetInputNames(),
-                sub_io_bindings[step]->GetInputs(),
-                pipeline_context_.accumulation_step_fetches,
-                &fetches);
-          ORT_THROW_IF_ERROR(status);
-        }
-      }, i);
-    } else {
-      RunOptions run_options_ = run_options;
-      run_options_.only_execute_path_to_fetches = false;
-      auto status = InferenceSession::Run(
-            run_options_,
-            sub_io_binding->GetInputNames(),
-            sub_io_binding->GetInputs(),
-            sub_io_binding->GetOutputNames(),
-            &sub_io_binding->GetOutputs());
-      ORT_THROW_IF_ERROR(status);
-    }
+      if (step != num_steps - 1) {
+        RunOptions run_options_ = run_options;
+        run_options_.only_execute_path_to_fetches = true;
+        std::vector<OrtValue> fetches;
+        auto status = InferenceSession::Run(
+              run_options_,
+              sub_io_bindings[step]->GetInputNames(),
+              sub_io_bindings[step]->GetInputs(),
+              pipeline_context_.accumulation_step_fetches,
+              &fetches);
+        ORT_THROW_IF_ERROR(status);
+      } else {
+        RunOptions run_options_ = run_options;
+        run_options_.only_execute_path_to_fetches = false;
+        auto status = InferenceSession::Run(
+              run_options_,
+              sub_io_bindings[step]->GetInputNames(),
+              sub_io_bindings[step]->GetInputs(),
+              sub_io_bindings[step]->GetOutputNames(),
+              &sub_io_bindings[step]->GetOutputs());
+        ORT_THROW_IF_ERROR(status);
+      }
+    }, i);
   }
 
-  if (pipeline_context_.num_pipeline_stages > 1) {
-    pipeline_worker_pool_.JoinAll();
-    onnxruntime::contrib::OrtEventPool::GetInstance().ResetAllEvents();
-  }
+  pipeline_worker_pool_.JoinAll();
+  onnxruntime::contrib::OrtEventPool::GetInstance().ResetAllEvents();
 #if defined(USE_NCCL) && defined(USE_NCCL_P2P)
     auto& nccl_service = cuda::NcclService::GetInstance();
     nccl_service.Reset();

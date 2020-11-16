@@ -90,6 +90,12 @@ void Recv::ReceiveData(
                          tensor->SizeInBytes(), cudaMemcpyHostToDevice));
 #endif
     tensor_offset_in_bytes += tensor->SizeInBytes();
+
+    std::vector<float> buffer_(tensor->Shape().Size());
+    cudaMemcpy(buffer_.data(), tensor->DataRaw(), tensor->SizeInBytes(), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < tensor->Shape().Size(); ++i) {
+      std::cout << "[recv.cc] batch " << tag << ", out[" << i << "]=" << buffer_[i] << std::endl; 
+    }
   }
   assert(tensor_offset_in_bytes == aggregated_aligned_tensor_bytes);
 

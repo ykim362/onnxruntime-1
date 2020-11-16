@@ -8,12 +8,11 @@ namespace cuda {
 template <typename SrcT, typename DstT>
 __global__ void _MixedPrecisionScale(
     const SrcT* input_data,
-    const float* /*scale_data*/,
+    const float* scale_data,
     DstT* output_data,
     CUDA_LONG N) {
   CALCULATE_ELEMENTWISE_INDEX_OR_EXIT(id, N);
-  // printf("[mixed_precision_scale.cu] %f, %f\n", float(*scale_data), float(input_data[id]));
-  output_data[id] = static_cast<DstT>(1.0f * static_cast<float>(input_data[id]));
+  output_data[id] = static_cast<DstT>(*scale_data * static_cast<float>(input_data[id]));
 }
 
 template <typename SrcT, typename DstT>

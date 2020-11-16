@@ -274,10 +274,6 @@ Status SequentialExecutor::Execute(const SessionState& session_state, const std:
     utils::DumpNodeInputs(op_kernel_context, p_op_kernel->Node(), session_state);
 #endif
 
-    auto& profile_context = profile::Context::GetInstance();
-    const auto tag = profile_context.GetThreadTagOrDefault(std::this_thread::get_id());
-    std::cout << "[sequential_executor.cc] batch " << tag << ", node " << node.Name() << std::endl;
-
     const std::string node_name_for_profiling = [&]() -> std::string {
       if (!is_profiler_enabled) return {};
       // Derive something meaningful for profile traces and logs if node name field is blank in execution graph

@@ -12,6 +12,8 @@
 #include "core/providers/cuda/math/binary_elementwise_ops.h"
 #include "core/providers/cuda/math/unary_elementwise_ops_impl.h"
 
+#include "core/profile/context.h"
+
 using namespace onnxruntime::common;
 namespace onnxruntime {
 namespace cuda {
@@ -424,6 +426,12 @@ Status ReduceComputeCore(CUDAExecutionProvider& cuda_ep, const Tensor& input, Pr
     return Status::OK();
   }
 
+  auto& profile_context = profile::Context::GetInstance();
+  const auto tag = profile_context.GetThreadTagOrDefault(std::this_thread::get_id());
+
+  std::vector<CudaT> in_buffer(input_shape.Size());
+  std::vector<CudaT> out_buffer(output.Shape().Size());
+
   // Block of fast matrix reduction.
   if (fast_reduction) {
     int m{}, n{};
@@ -431,18 +439,46 @@ Status ReduceComputeCore(CUDAExecutionProvider& cuda_ep, const Tensor& input, Pr
         cudnn_reduce_op, input_shape.GetDims(), axes, m, n);
     switch (applicable_matrix_reduction) {
       case ApplicableMatrixReduction::Rows: {
-        return reduce_matrix_rows(
+        cudaMemcpy(in_buffer.data(), input.template Data<T>(), input_shape.Size() * sizeof(T), cudaMemcpyDeviceToHost);
+
+        auto status = reduce_matrix_rows(
             reinterpret_cast<const CudaT*>(input.template Data<T>()),
             reinterpret_cast<CudaT*>(output.template MutableData<T>()),
             m, n);
+
+        cudaMemcpy(out_buffer.data(), output.template Data<T>(), output.Shape().Size() * sizeof(T), cudaMemcpyDeviceToHost);
+
+        //for (int i = 0; i < input_shape.Size(); ++i) {
+        //  std::cout << "[reduction_ops.cc] batch " << tag << ", " << "in" << "[" << i << "]=" << in_buffer[i] << std::endl;
+        //}
+
+        //for (int i = 0; i < output.Shape().Size(); ++i) {
+        //  std::cout << "[reduction_ops.cc] batch " << tag << ", " << "out" << "[" << i << "]=" << out_buffer[i] << std::endl;
+        //}
+
+        return status;
       }
       case ApplicableMatrixReduction::Columns: {
         const auto buffer_size_bytes = compute_reduce_matrix_columns_buffer_size<CudaT>(m, n);
         auto buffer = cuda_ep.GetScratchBuffer<void>(buffer_size_bytes);
-        return reduce_matrix_columns(
+
+        cudaMemcpy(in_buffer.data(), input.template Data<T>(), input_shape.Size() * sizeof(T), cudaMemcpyDeviceToHost);
+
+        auto status = reduce_matrix_columns(
             reinterpret_cast<const CudaT*>(input.template Data<T>()),
             reinterpret_cast<CudaT*>(output.template MutableData<T>()),
             m, n, buffer.get(), buffer_size_bytes);
+
+        cudaMemcpy(out_buffer.data(), output.template Data<T>(), output.Shape().Size() * sizeof(T), cudaMemcpyDeviceToHost);
+
+        //for (int i = 0; i < input_shape.Size(); ++i) {
+        //  std::cout << "[reduction_ops.cc] batch " << tag << ", " << "in" << "[" << i << "]=" << in_buffer[i] << std::endl;
+        //}
+
+        //for (int i = 0; i < output.Shape().Size(); ++i) {
+        //  std::cout << "[reduction_ops.cc] batch " << tag << ", " << "out" << "[" << i << "]=" << out_buffer[i] << std::endl;
+        //}
+        return status;
       }
       default:
         break;

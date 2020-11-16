@@ -96,9 +96,6 @@ TrainingConfigurationResult ConfigureSessionForTraining(
 
   // This field contains ONNX model's names for output tensors to be sliced. 
   std::unordered_set<std::string> outputs_to_slice;
-  //for (auto name : parameters.weights_to_train) {
-  //  std::cout << "[orttraining_pybind_state.cc, ConfigureSessionForTraining] train weight: " << name << std::endl;
-  //}
   config.immutable_weights = parameters.immutable_weights;
 
   config.gradient_accumulation_steps = parameters.gradient_accumulation_steps;
@@ -143,7 +140,6 @@ TrainingConfigurationResult ConfigureSessionForTraining(
       };
 
     auto process_cut_info = [&](std::string& cut_info_string) {
-      // TrainingSession::TrainingConfiguration::CutInfo cut_info;
       std::vector<TrainingSession::TrainingConfiguration::CutInfo> cut_list;
       const std::string group_delimiter = ",";
       const std::string edge_delimiter = ":";
@@ -351,13 +347,6 @@ void addObjectMethodsForTraining(py::module& m) {
           std::getline(dbg_flag_file, dbg_flag_line);
           dbg_flag_file.close();
         }
-
-        bool gdb_flag = dbg_flag_line[0] == '1' ? true : false;
-        std::cout << "Wait for attach..." << std::endl;
-        while (gdb_flag) {
-          gdb_flag = gdb_flag;
-        }
-        std::cout << "Wait for attach...done" << std::endl;
 
         const auto config_result = ConfigureSessionForTraining(static_cast<TrainingSession*>(sess->GetSessionHandle()), parameters);
 

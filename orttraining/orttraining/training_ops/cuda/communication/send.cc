@@ -68,6 +68,11 @@ void Send::SendData(
     CUDA_CALL(cudaMemcpy(buffer.get() + tensor_offsets_in_bytes[i], tensor->DataRaw(),
                          tensor_sizes_in_bytes[i], cudaMemcpyDeviceToHost));
 #endif
+    std::vector<float> buffer_(tensor->Shape().Size());
+    cudaMemcpy(buffer_.data(), tensor->DataRaw(), tensor->SizeInBytes(), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < tensor->Shape().Size(); ++i) {
+      std::cout << "[send.cc] batch " << tag << ", in[" << i << "]=" << buffer_[i] << std::endl; 
+    }
   }
 
 #ifdef ENABLE_NVTX_PROFILE
